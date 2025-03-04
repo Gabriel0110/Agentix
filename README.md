@@ -5,7 +5,9 @@
 
 # Agentix Framework
 
-A **simple and extensible** Python framework for building AI-powered agents based on the original [Webby-Agents](https://github.com/gabriel0110/webby-agents) web-native TypeScript framework. This framework provides the core building blocks needed to integrate Large Language Models (LLMs) into your web applications and empower them with “agentic” capabilities. The goal is to provide simplicity but also customization and extensibility for more advanced use cases ***if you so desire***.
+A **simple and extensible** Python framework for building AI-powered agents based on the original [Webby-Agents](https://github.com/gabriel0110/webby-agents) web-native TypeScript framework. This framework provides the core building blocks needed to integrate Large Language Models (LLMs) into applications and empower them with “agentic” capabilities. The goal is to provide simplicity but also customization and extensibility for more advanced use cases ***if you so desire***.
+
+The core of this framework is built upon the writings of Chip Nguyen's [Agents](https://huyenchip.com/2025/01/07/agents.html) blog post and Anthropic's [Building effective agents](https://www.anthropic.com/research/building-effective-agents) blog post.
 
 > **Note**: The framework is **experimental** and still under **active** development and tuning. ***Use at your own risk***. Please report any issues you encounter, and feel free to contribute!
 
