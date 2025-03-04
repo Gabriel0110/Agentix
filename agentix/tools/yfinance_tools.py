@@ -172,7 +172,7 @@ class StockHistoricalPricesTool(Tool):
     
     @property
     def description(self) -> str:
-        return "Get historical stock prices for a given symbol and time period"
+        return "Get historical stock prices for a given symbol and time period. Use this to analyze stock performance over time."
     
     @property
     def parameters(self) -> List[ToolParameter]:
@@ -186,16 +186,39 @@ class StockHistoricalPricesTool(Tool):
             ToolParameter(
                 name="period",
                 type="string",
-                description="Time period (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)",
+                description="Time period to analyze (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max). Use '1mo' for one month, '3mo' for three months, etc.",
                 required=False
             ),
             ToolParameter(
                 name="interval",
                 type="string",
-                description="Data interval (1d, 5d, 1wk, 1mo, 3mo)",
+                description="Data interval between points (1d, 5d, 1wk, 1mo, 3mo). Use '1d' for daily data.",
                 required=False
             )
         ]
+    
+    @property
+    def parameter_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": "Stock symbol (e.g., AAPL)"
+                },
+                "period": {
+                    "type": "string",
+                    "enum": ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"],
+                    "description": "Time period to analyze"
+                },
+                "interval": {
+                    "type": "string",
+                    "enum": ["1d", "5d", "1wk", "1mo", "3mo"],
+                    "description": "Data interval between points"
+                }
+            },
+            "required": ["symbol"]
+        }
     
     @property
     def docs(self) -> ToolDocumentation:
@@ -206,57 +229,156 @@ class StockHistoricalPricesTool(Tool):
             parameters=self.parameters
         )
     
+    @property
+    def usage_examples(self) -> List[str]:
+        return [
+            # Example for last month's daily data
+            'TOOL REQUEST: StockHistoricalPrices {"symbol": "AAPL", "period": "1mo", "interval": "1d"}',
+            # Example for last 3 months weekly data
+            'TOOL REQUEST: StockHistoricalPrices {"symbol": "MSFT", "period": "3mo", "interval": "1wk"}',
+            # Example with just symbol (uses defaults)
+            'TOOL REQUEST: StockHistoricalPrices {"symbol": "GOOG"}'
+        ]
+        
     async def run(self, input_str: str, args: Optional[Dict[str, Any]] = None) -> str:
         """
-        Get historical stock prices for the given symbol.
+        Run the tool to fetch historical stock prices.
         
         Args:
-            input_str: The stock symbol
-            args: Optional structured arguments with period and interval
-            
+            input_str: A string input (unused with args)
+            args: Dictionary with 'symbol', 'period', and 'interval'
+        
         Returns:
-            Historical stock price data
+            A string containing the historical stock prices or an error message
         """
-        symbol = input_str.strip()
-        period = "1mo"
-        interval = "1d"
-        
-        # Use args if provided
-        if args:
-            if "symbol" in args:
-                symbol = args["symbol"]
-            if "period" in args:
-                period = args["period"]
-            if "interval" in args:
-                interval = args["interval"]
-        
-        if not symbol:
-            return "Error: Stock symbol is required"
+        import yfinance as yf
+        import pandas as pd
+        from datetime import datetime
         
         try:
-            stock = yf.Ticker(symbol)
-            historical_price = stock.history(period=period, interval=interval)
+            # Extract parameters
+            if args:
+                symbol = args.get("symbol", "").upper()
+                period = args.get("period", "1mo")
+                interval = args.get("interval", "1d")
+            else:
+                # Try to parse from input_str if no args
+                return "Error: This tool requires JSON parameters. Please use format: {\"symbol\": \"AAPL\", \"period\": \"1mo\", \"interval\": \"1d\"}"
             
-            if historical_price.empty:
-                return f"No historical price data found for {symbol} with period={period} and interval={interval}"
+            # Validate the symbol first
+            if not symbol:
+                return "Error: No stock symbol provided. Please provide a valid stock symbol."
             
-            # Format the data in a more readable way
+            # Verify the symbol exists
+            try:
+                ticker = yf.Ticker(symbol)
+                # Try to get some basic info to verify the ticker exists
+                # Different yfinance versions have different attributes
+                try:
+                    info = ticker.info
+                    if not info or 'symbol' not in info:
+                        common_symbols = "AAPL (Apple), MSFT (Microsoft), GOOG (Google), AMZN (Amazon), META (Facebook), TSLA (Tesla)"
+                        return f"Error: Invalid or unknown stock symbol '{symbol}'. Please try one of these common symbols: {common_symbols}"
+                except:
+                    # Try to get history as a fallback check
+                    test_history = ticker.history(period="1d")
+                    if test_history.empty:
+                        common_symbols = "AAPL (Apple), MSFT (Microsoft), GOOG (Google), AMZN (Amazon), META (Facebook), TSLA (Tesla)"
+                        return f"Error: Invalid or unknown stock symbol '{symbol}'. Please try one of these common symbols: {common_symbols}"
+            except Exception as e:
+                common_symbols = "AAPL (Apple), MSFT (Microsoft), GOOG (Google), AMZN (Amazon), META (Facebook), TSLA (Tesla)"
+                return f"Error: Could not validate stock symbol '{symbol}'. Error: {str(e)}. Please try one of these common symbols: {common_symbols}"
+            
+            # Validate period and interval
+            valid_periods = ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"]
+            valid_intervals = ["1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"]
+            
+            if period not in valid_periods:
+                return f"Error: Invalid period '{period}'. Valid periods are: {', '.join(valid_periods)}"
+            
+            if interval not in valid_intervals:
+                return f"Error: Invalid interval '{interval}'. Valid intervals are: {', '.join(valid_intervals)}"
+            
+            # Get historical data
+            hist = ticker.history(period=period, interval=interval)
+            
+            if hist.empty:
+                return f"No historical data available for {symbol} with period={period} and interval={interval}. Try different parameters."
+            
+            # Format the data for readability
             formatted_data = []
-            for date, row in historical_price.iterrows():
-                formatted_data.append({
-                    "Date": date.strftime("%Y-%m-%d"),
-                    "Open": f"{row['Open']:.2f}",
-                    "High": f"{row['High']:.2f}",
-                    "Low": f"{row['Low']:.2f}",
-                    "Close": f"{row['Close']:.2f}",
-                    "Volume": int(row["Volume"]) if "Volume" in row else "N/A"
-                })
             
-            # Just return the most recent N data points to avoid overwhelming responses
-            return f"Historical prices for {symbol} (period={period}, interval={interval}):\n" + \
-                   json.dumps(formatted_data[-5:], indent=2)  # Return only the 5 most recent data points
+            # Limit to last 5 data points to avoid overwhelming response
+            hist_tail = hist.tail(5)
+            
+            for date, row in hist_tail.iterrows():
+                date_str = date.strftime('%Y-%m-%d')
+                formatted_row = {
+                    "Date": date_str,
+                    "Open": round(row["Open"], 2),
+                    "High": round(row["High"], 2),
+                    "Low": round(row["Low"], 2),
+                    "Close": round(row["Close"], 2),
+                    "Volume": int(row["Volume"]) if "Volume" in row else "N/A"
+                }
+                formatted_data.append(formatted_row)
+            
+            # Calculate summary statistics for the full period
+            if len(hist) >= 2:
+                start_price = hist.iloc[0]["Close"]
+                end_price = hist.iloc[-1]["Close"]
+                price_change = end_price - start_price
+                percent_change = (price_change / start_price) * 100
+                
+                high = hist["High"].max()
+                low = hist["Low"].min()
+                avg_volume = hist["Volume"].mean() if "Volume" in hist else "N/A"
+                
+                summary = (
+                    f"Summary for {symbol} over {period} ({interval} intervals):\n"
+                    f"- Starting price: ${start_price:.2f}\n"
+                    f"- Current price: ${end_price:.2f}\n"
+                    f"- Change: ${price_change:.2f} ({percent_change:.2f}%)\n"
+                    f"- Highest price: ${high:.2f}\n"
+                    f"- Lowest price: ${low:.2f}\n"
+                )
+                
+                if avg_volume != "N/A":
+                    summary += f"- Average trading volume: {int(avg_volume):,}\n"
+                
+                performance = ""
+                if percent_change > 0:
+                    performance = f"The stock has gained {percent_change:.2f}% over this period."
+                elif percent_change < 0:
+                    performance = f"The stock has lost {abs(percent_change):.2f}% over this period."
+                else:
+                    performance = "The stock price has remained stable over this period."
+            else:
+                summary = f"Insufficient data for {symbol} with the specified parameters to calculate summary statistics."
+                performance = ""
+            
+            # Create a DataFrame for prettier output
+            df_str = ""
+            try:
+                df = pd.DataFrame(formatted_data)
+                df_str = df.to_string(index=False)
+            except:
+                # Fallback to simple string representation
+                df_str = str(formatted_data)
+            
+            # Combine results
+            result = (
+                f"Historical price data for {symbol} (showing last 5 data points):\n\n"
+                f"{df_str}\n\n"
+                f"{summary}\n"
+                f"{performance}"
+            )
+            
+            return result
+        
         except Exception as e:
-            return f"Error fetching historical prices for {symbol}: {e}"
+            error_msg = str(e)
+            return f"Error retrieving historical stock prices for symbol '{symbol}': {error_msg}. Please verify the symbol and parameters."
 
 
 class StockFundamentalsTool(Tool):

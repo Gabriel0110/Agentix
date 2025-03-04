@@ -2,6 +2,7 @@ import time
 from typing import List, Dict, Any, Optional, Callable, Union, TypedDict, Awaitable, cast
 from dataclasses import dataclass
 
+from ..tools.tool_analyzer import ToolAnalyzer
 from ..llms import LLM
 from ..memory.memory import Memory, MemoryRole, ConversationMessage
 from ..memory.reflection_memory import ReflectionMemory
@@ -217,6 +218,8 @@ class Agent:
         self.step_count = 0
         self._tool_usage_counter = {}  # Initialize tool usage counter
         self._consecutive_tool_calls = 0  # Track consecutive tool calls
+        self._failed_tool_calls = {}  # Track tools that have failed
+        self._last_n_tool_calls = []  # Track recent tool calls to detect stuck patterns
         
         self.logger.log(f"[Agent:{self.name}] Starting run", {"query": query})
         
@@ -261,15 +264,48 @@ class Agent:
             # Tool usage?
             tool_request = ToolRequestParser.parse(llm_output)
             if tool_request:
+                self.logger.log(f"[Agent:{self.name}] Tool request parsed:", {"tool": tool_request.tool_name, "query": tool_request.query, "args": tool_request.args})
+                
+                # Keep track of last few tool calls to detect patterns
+                tool_key = f"{tool_request.tool_name}:{tool_request.query}"
+                self._last_n_tool_calls.append(tool_key)
+                if len(self._last_n_tool_calls) > 3:
+                    self._last_n_tool_calls.pop(0)  # Keep only the most recent 3
+                    
+                # Check if we're in a problematic pattern
+                is_stuck_pattern = self._check_for_stuck_patterns()
+                
+                # Increment counter
                 self._consecutive_tool_calls += 1
                 
-                # Check for too many consecutive tool calls without a final answer
-                if self._consecutive_tool_calls > 3:
-                    # Add a reminder to produce a final answer
+                # Check for tool call issues
+                if is_stuck_pattern or self._consecutive_tool_calls > 3:
+                    # We're either in a loop or making too many consecutive calls
+                    guidance_message = (
+                        "I notice you're making multiple tool calls without providing a final answer. "
+                        "Based on the information you've gathered so far, please provide a FINAL ANSWER: to "
+                        "the user's query. If you're encountering errors with a particular tool, try a different "
+                        "approach or summarize what you do know."
+                    )
+                    
+                    # If we've made many tool calls, make the message stronger
+                    if self._consecutive_tool_calls > 5:
+                        guidance_message = (
+                            "You have made several consecutive tool calls without reaching a conclusion. "
+                            "Please STOP making additional tool calls and provide a FINAL ANSWER: based on "
+                            "the information you have. Even a partial answer is better than continuing to "
+                            "call tools in a loop."
+                        )
+                    
                     await self.memory.add_message({
                         "role": "system", 
-                        "content": "You have made several tool calls in a row. If you have enough information to answer the user's question, please provide a FINAL ANSWER: now instead of making more tool calls."
+                        "content": guidance_message
                     })
+                    
+                    # For extreme cases, force a final answer
+                    if self._consecutive_tool_calls > 7:
+                        self.logger.log(f"[Agent:{self.name}] Forcing final answer after too many consecutive tool calls")
+                        return "I apologize, but I've been unable to provide a complete answer due to tool usage issues. Please try rephrasing your query or asking about a different topic."
                 
                 # Store the tool request in memory to help the model see its own requests
                 await self.memory.add_message({
@@ -280,6 +316,17 @@ class Agent:
                 
                 result = await self.handle_tool_request(tool_request)
                 
+                # Check for error results and track failed tools
+                if isinstance(result, str) and (result.lower().startswith("error") or "error" in result.lower()):
+                    self._failed_tool_calls[tool_request.tool_name] = self._failed_tool_calls.get(tool_request.tool_name, 0) + 1
+                    
+                    # If a tool has failed multiple times, add stronger guidance
+                    if self._failed_tool_calls.get(tool_request.tool_name, 0) >= 2:
+                        await self.memory.add_message({
+                            "role": "system", 
+                            "content": f"The tool '{tool_request.tool_name}' has failed multiple times. Please use a different approach or provide a FINAL ANSWER: with what you know."
+                        })
+                
                 # Store tool results with a more distinctive format
                 await self.memory.add_message({
                     "role": "function", 
@@ -289,13 +336,15 @@ class Agent:
                 })
                 
                 continue  # Next iteration
+            else:
+                self.logger.log(f"[Agent:{self.name}] No tool request found in output")
             
             # Reset consecutive tool calls counter if we're not making a tool call
             self._consecutive_tool_calls = 0
             
             # Final answer check
-            if llm_output.startswith("FINAL ANSWER:"):
-                final_ans = llm_output.replace("FINAL ANSWER:", "").strip()
+            if "FINAL ANSWER:" in llm_output:
+                final_ans = llm_output.split("FINAL ANSWER:")[1].strip()
                 self.logger.log(f"[Agent:{self.name}] Final answer found", {"final_ans": final_ans})
                 
                 # Add final answer to memory
@@ -316,6 +365,34 @@ class Agent:
             
             # Otherwise, treat as intermediate output
             await self.memory.add_message({"role": "assistant", "content": llm_output})
+        
+    def _check_for_stuck_patterns(self) -> bool:
+        """
+        Check if the agent is stuck in a pattern of repetitive tool calls.
+        
+        Returns:
+            bool: True if a stuck pattern is detected, False otherwise
+        """
+        # Need at least 3 calls to detect a pattern
+        if len(self._last_n_tool_calls) < 3:
+            return False
+        
+        # Check for exact repetition (A, A, A)
+        if self._last_n_tool_calls[-1] == self._last_n_tool_calls[-2] == self._last_n_tool_calls[-3]:
+            return True
+        
+        # Check for alternating pattern (A, B, A)
+        if self._last_n_tool_calls[-1] == self._last_n_tool_calls[-3]:
+            return True
+        
+        # Check for cycling pattern (A, B, C, A, B, C)
+        if len(self._last_n_tool_calls) >= 6:
+            if (self._last_n_tool_calls[-1] == self._last_n_tool_calls[-4] and
+                self._last_n_tool_calls[-2] == self._last_n_tool_calls[-5] and
+                self._last_n_tool_calls[-3] == self._last_n_tool_calls[-6]):
+                return True
+            
+        return False
     
     async def single_pass(self) -> str:
         """
@@ -374,41 +451,72 @@ class Agent:
     
     def build_system_prompt(self) -> str:
         """
-        Build the system prompt, enumerating tools etc.
+        Build an intelligent system prompt that includes complete tool documentation.
         """
-        tool_lines = "\n".join([
-            f"- {t.name}: {t.description or '(no description)'}"
-            for t in self.tools
-        ])
-        
         lines = []
         lines.append(f'You are an intelligent AI agent named "{self.name}".')
         
-        if tool_lines:
-            lines.append(
-                f"You have access to these tools:\n{tool_lines}\n"
-                "Use them by responding with EXACT format:\n"
-                'TOOL REQUEST: <ToolName> "<Query>"'
-            )
+        if self.tools:
+            # Analyze all tools using the new analyze_tools method
+            tool_analyses = ToolAnalyzer.analyze_tools(self.tools)
+            
+            lines.append("\nAvailable Tools:")
+            for analysis in tool_analyses:
+                # Tool name and description
+                lines.append(f"\n📦 {analysis.name}")
+                lines.append(f"Description: {analysis.description}")
+                
+                # Parameters if any
+                if analysis.parameters:
+                    lines.append("Parameters:")
+                    for param in analysis.parameters:
+                        required = "(required)" if param.required else "(optional)"
+                        lines.append(f"  - {param.name}: {param.type} {required}")
+                        if param.description:
+                            lines.append(f"    {param.description}")
+                        
+                        # Show valid values if available
+                        if analysis.valid_parameter_values and param.name in analysis.valid_parameter_values:
+                            valid_values = analysis.valid_parameter_values[param.name]
+                            lines.append(f"    Valid values: {', '.join(valid_values)}")
+                
+                # Usage examples with explanations
+                if analysis.usage_examples:
+                    lines.append("Example Usage:")
+                    for example in analysis.usage_examples:
+                        lines.append(f"  {example}")
+                
+                # Parameter schema if available
+                if analysis.parameter_schema:
+                    lines.append("Parameter Schema:")
+                    lines.append(f"  {analysis.parameter_schema}")
+            
+            lines.append("\nHow to use tools:")
+            lines.append("1. For tools with parameters, ALWAYS use the JSON format:")
+            lines.append('   TOOL REQUEST: ToolName {"param1": "value1", "param2": "value2"}')
+            lines.append("2. For simple tools without parameters:")
+            lines.append('   TOOL REQUEST: ToolName "your query"')
+            lines.append("3. When a tool accepts specific values (like '1mo', '3mo', etc.), use ONLY those valid values")
+            lines.append("4. Always check the parameter descriptions and valid values before making a tool request")
+            lines.append("5. For date-based queries, use the appropriate period parameter instead of specific dates")
         else:
             lines.append("You do not have any tools available.")
         
         lines.append(
-            "When you have the final answer, format EXACTLY:\n"
-            "FINAL ANSWER: <Your answer>\n"
-            "\n"
-            "Important guidelines:\n"
-            "1. After using tools to gather information, you MUST provide a final answer to the user.\n"
-            "2. Do not repeat the same tool calls unnecessarily.\n"
-            "3. Once you have the information needed, use 'FINAL ANSWER:' to respond directly to the user.\n"
-            "4. When you see 'TOOL RESULT:' in the conversation, this means you've already received a response from that tool.\n"
-            "5. PAY CLOSE ATTENTION to previous tool results in the conversation before making new tool calls.\n"
-            "6. If you already have the information needed from a previous tool result, DO NOT call the same tool again.\n"
-            "7. Always analyze provided tool results before making additional tool calls."
+            "\nImportant guidelines:"
+            "\n1. After using tools to gather information, you MUST provide a final answer to the user."
+            "\n2. Do not repeat the same tool calls unnecessarily."
+            "\n3. Once you have the information needed, use 'FINAL ANSWER:' to respond directly to the user."
+            "\n4. When you see 'TOOL RESULT:' in the conversation, this means you've already received a response from that tool."
+            "\n5. PAY CLOSE ATTENTION to previous tool results in the conversation before making new tool calls."
+            "\n6. If you already have the information needed from a previous tool result, DO NOT call the same tool again."
+            "\n7. Always analyze provided tool results before making additional tool calls."
+            "\n8. NEVER try to use date strings directly - use the predefined period values like '1mo', '3mo', etc."
         )
+        
         lines.extend(self.instructions)
         
-        return "\n\n".join(lines)
+        return "\n".join(lines)
     
     def parse_plan(self, plan: str) -> List[Dict[str, str]]:
         """
@@ -441,7 +549,7 @@ class Agent:
     
     async def handle_tool_request(self, request: ParsedToolRequest) -> str:
         """
-        Handle a tool request from the agent
+        Handle a tool request from the agent with improved error handling and feedback.
         """
         self.logger.log("Processing tool request", request)
         
@@ -454,33 +562,67 @@ class Agent:
             self.logger.log(f"Tool loop detected: {tool_key} used {self._tool_usage_counter[tool_key]} times")
             return (
                 f"I've noticed you've called '{request.tool_name}' with the same parameters multiple times. "
-                f"You already have this information from previous calls. "
-                f"Please analyze the previous tool results and provide a FINAL ANSWER: to respond to the user's query."
+                f"You already have this information from previous calls or the request is failing consistently. "
+                f"Please analyze the previous tool results and provide a FINAL ANSWER: to respond to the user's query "
+                f"with the best information you have, even if incomplete."
             )
         
         try:
-            validation_error = ToolRequestParser.validate_basic(request, self.tools)
-            if validation_error:
-                raise Exception(validation_error)
-            
+            # First check if tool exists
             tool = next(
                 (t for t in self.tools if t.name.lower() == request.tool_name.lower()),
                 None
             )
             if not tool:
-                raise Exception(f'Tool "{request.tool_name}" is not available.')
+                available_tools = ", ".join([t.name for t in self.tools])
+                return (
+                    f"Error: Tool '{request.tool_name}' is not available. "
+                    f"Available tools are: {available_tools}. "
+                    f"Please use one of these tools or provide a FINAL ANSWER: with your best response."
+                )
             
-            ToolRequestParser.validate_parameters(tool, request)
+            # Now do the basic validation
+            validation_error = ToolRequestParser.validate_basic(request, self.tools)
+            if validation_error:
+                return f"Error: {validation_error} Please revise your tool request or provide a FINAL ANSWER:"
             
+            # Validate parameters before calling the tool
+            try:
+                ToolRequestParser.validate_parameters(tool, request)
+            except Exception as param_err:
+                # Provide helpful feedback about parameter errors
+                params_help = "\n".join([
+                    f"  - {p.name}: {p.type} ({'required' if p.required else 'optional'}) - {p.description}"
+                    for p in tool.parameters or []
+                ])
+                
+                return (
+                    f"Error: Invalid parameters for tool '{tool.name}': {str(param_err)}\n"
+                    f"Tool '{tool.name}' expects these parameters:\n{params_help}\n"
+                    f"Example usage: {tool.docs.usage_example if tool.docs else 'No example available'}"
+                )
+            
+            # Check if hook allows this
             if self.hooks.on_tool_call:
                 proceed = await self.hooks.on_tool_call(tool.name, request.query)
                 if not proceed:
                     self.logger.log("Tool call cancelled by hook", {"tool_name": tool.name})
                     return f'Tool call to "{tool.name}" cancelled by user approval.'
             
+            # Execute the tool
             result = await tool.run("", request.args) if request.args else await tool.run(request.query)
             
-            self.logger.log("Tool execution result", {"tool_name": tool.name, "result": result})
+            # Check for empty or error results
+            if not result or (isinstance(result, str) and result.lower().startswith("error")):
+                self.logger.error(f"Tool execution returned error or empty result", {"tool_name": tool.name, "result": result})
+                # Add additional guidance
+                result = (
+                    f"{result}\n\n"
+                    f"The tool call encountered issues. Please try a different approach or provide a "
+                    f"FINAL ANSWER: with your best response based on available information."
+                )
+            else:
+                self.logger.log("Tool execution successful", {"tool_name": tool.name})
             
             if self.hooks.on_tool_result:
                 await self.hooks.on_tool_result(tool.name, result)
@@ -489,7 +631,14 @@ class Agent:
         except Exception as err:
             error_msg = str(err)
             self.logger.error("Tool request failed", {"error": error_msg})
-            return f"Error processing tool request: {error_msg}"
+            
+            # Provide more helpful error responses
+            return (
+                f"Error processing tool request: {error_msg}\n\n"
+                f"Consider using a different approach or provide a FINAL ANSWER: based on what you know. "
+                f"If you believe this was a system error unrelated to your request, you can try once more "
+                f"with different parameters."
+            )
     
     def should_stop(self, elapsed: int) -> bool:
         """

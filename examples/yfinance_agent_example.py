@@ -50,9 +50,9 @@ async def main():
     
     # 4) Create agent options
     agent_options = AgentOptions(
-        max_steps=5,  # Allow multiple steps for financial analysis
-        usage_limit=10,
-        time_to_live=60000,  # 60 seconds timeout
+        max_steps=10,  # Allow multiple steps for financial analysis
+        usage_limit=15,
+        time_to_live=120000,  # 120 seconds timeout
         debug=True  # Enable debugging
     )
     
@@ -64,40 +64,34 @@ async def main():
         tools=yfinance_toolkit.get_tools(),
         instructions=[
             "You are a stock market analysis assistant that helps users analyze stocks and financial data.",
-            "You have access to the following YFinance tools that you must use correctly:",
-            "- StockPrice: Get current price with 'TOOL REQUEST: StockPrice \"SYMBOL\"'",
-            "- CompanyInfo: Get company details with 'TOOL REQUEST: CompanyInfo \"SYMBOL\"'", 
-            "- StockHistoricalPrices: Get price history with 'TOOL REQUEST: StockHistoricalPrices {\"symbol\": \"SYMBOL\", \"period\": \"1mo\", \"interval\": \"1d\"}'",
-            "- StockFundamentals: Get key metrics with 'TOOL REQUEST: StockFundamentals \"SYMBOL\"'",
-            "- FinancialStatements: Get statements with 'TOOL REQUEST: FinancialStatements {\"symbol\": \"SYMBOL\", \"statement_type\": \"income\"}'",
+            "When analyzing stocks, follow these best practices:",
+            "1. Verify stock symbols exist before making multiple requests by checking basic information first",
+            "2. Always use valid stock symbols - common ones include AAPL (Apple), MSFT (Microsoft), GOOG (Google), AMZN (Amazon), TSLA (Tesla)",
+            "3. Handle missing data or invalid symbols gracefully, providing alternatives when possible",
+            "4. Provide clear explanations of financial metrics and what they mean for investors",
+            "5. Present data in a structured format with summary statistics",
             "",
-            "When analyzing stocks:",
-            "1. Always start by getting the current stock price using StockPrice",
-            "2. Follow up with CompanyInfo to understand the business",
-            "3. Use StockFundamentals to analyze key financial metrics",
-            "4. For historical analysis, use StockHistoricalPrices with appropriate period/interval",
-            "5. For detailed financials, use FinancialStatements with the right statement type",
+            "For historical data analysis:",
+            "- Use appropriate period values: '1d', '5d', '1mo', '3mo', '6mo', '1y', etc.",
+            "- Interval options: '1d', '1wk', '1mo'",
             "",
-            "After retrieving the necessary information with tools, ALWAYS provide your final answer to the user with the format:",
-            "FINAL ANSWER: <Your comprehensive answer>",
-            "",
-            "Remember: You must use FINAL ANSWER: to conclude your response after using tools.",
-            "Do not keep using tools repeatedly if you already have the information needed to answer the question.",
-            "",
-            "Provide clear explanations of all data retrieved and what it means for investors.",
-            "Format tool requests exactly as shown in the examples above.",
-            "Always verify the stock symbol exists before making multiple requests."
+            "If you encounter errors:",
+            "1. Verify the stock symbol is correct and try alternative symbols if needed",
+            "2. Try different parameter values if the first attempt fails",
+            "3. If a tool consistently fails, use a different approach or provide the best answer with available information",
+            "4. Always use FINAL ANSWER: to complete your response"
         ],
         options=agent_options,
     )
     
     # 6) Example user questions to demonstrate the agent's capabilities
     questions = [
-        "What's the current stock price of Apple?",
+        #"What's the current stock price of Apple?",
         #"Can you analyze Tesla stock and give me a summary of its fundamentals?",
-        #"How has Amazon's stock performed over the last month?",
+        "How has Amazon's stock performed over the last month?",
         #"What are Microsoft's most recent income statements?",
-        #"Compare Google (GOOGL) and Facebook (META) based on their financial ratios and performance.",
+        # Test error handling with an invalid symbol
+        #"Tell me about the stock BBC (should gracefully handle invalid symbol)"
     ]
     
     # 7) Run the agent with each question

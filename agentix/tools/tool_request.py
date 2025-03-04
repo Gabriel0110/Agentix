@@ -24,8 +24,8 @@ class ToolRequestParser:
     # We match either:
     # 1. Simple pattern: TOOL REQUEST: <ToolName> "<Query>"
     # 2. JSON pattern: TOOL REQUEST: <ToolName> {"key": "value"}
-    SIMPLE_PATTERN = re.compile(r'^TOOL REQUEST:\s*(\w+)\s+"([^"]+)"$', re.IGNORECASE)
-    JSON_PATTERN = re.compile(r'^TOOL REQUEST:\s*(\w+)\s+(\{.*\})$', re.IGNORECASE | re.DOTALL)
+    SIMPLE_PATTERN = re.compile(r'TOOL REQUEST:\s*(\w+)\s+"([^"]+)"', re.IGNORECASE)
+    JSON_PATTERN = re.compile(r'TOOL REQUEST:\s*(\w+)\s+(\{.*\})', re.IGNORECASE | re.DOTALL)
     
     @classmethod
     def parse(cls, input_str: str) -> Optional[ParsedToolRequest]:
@@ -39,24 +39,29 @@ class ToolRequestParser:
         Returns:
             A ParsedToolRequest object or None if parsing fails
         """
-        # First try JSON pattern
-        json_match = cls.JSON_PATTERN.match(input_str)
+        # First try to find JSON pattern anywhere in the input
+        json_match = cls.JSON_PATTERN.search(input_str)
         if json_match:
             try:
                 tool_name = json_match.group(1)
                 json_string = json_match.group(2)
+                # Clean up any potential trailing quotes or characters
+                json_string = json_string.strip()
+                if json_string.endswith('"'):
+                    json_string = json_string[:-1]
                 parsed_args = json.loads(json_string)
                 return ParsedToolRequest(
                     tool_name=tool_name,
                     query=json.dumps(parsed_args),  # Store full JSON as query
                     args=parsed_args
                 )
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
+                print(f"JSON parsing error: {e} in string: {json_string}")
                 # If JSON parsing fails, continue to try simple pattern
                 pass
         
         # Try simple pattern
-        match = cls.SIMPLE_PATTERN.match(input_str)
+        match = cls.SIMPLE_PATTERN.search(input_str)
         if not match:
             return None
         
