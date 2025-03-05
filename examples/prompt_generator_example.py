@@ -19,6 +19,9 @@ from agentix import (
 from agentix.tools import YFinanceToolkit
 from agentix.agents.prompt_builder import AgentPromptBuilder
 
+from dotenv import load_dotenv
+load_dotenv()
+
 
 async def main():
     """
@@ -29,7 +32,7 @@ async def main():
     
     # 1) Create a model for the prompt builder
     builder_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o",  # Use a strong model for prompt generation
         temperature=0.2  # Lower temperature for more predictable outputs
     )
@@ -67,7 +70,7 @@ async def main():
     print("\nCreating an agent with the generated prompt...\n")
     
     chat_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
     

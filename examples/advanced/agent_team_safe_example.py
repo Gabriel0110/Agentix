@@ -19,6 +19,9 @@ from agentix.agents.multi_agent import AgentTeam, TeamHooks
 from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory
 
+from dotenv import load_dotenv
+load_dotenv()
+
 class SafeAgentTeam(AgentTeam):
     """
     A safe agent team that can handle errors and continue execution.
@@ -31,17 +34,17 @@ async def main():
     """Main function demonstrating safe team execution."""
     # 1) Create LLM(s)
     model1 = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini",
         temperature=0.7,
     )
     model2 = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini",
         temperature=0.7,
     )
     model3 = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini",
         temperature=0.7,
     )

@@ -8,6 +8,9 @@ from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory, Tool
 from agentix.planner import SimpleLLMPlanner
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # Dummy tool
 class DummyCalendarTool(Tool):
     """A dummy calendar tool that simulates scheduling events."""
@@ -30,12 +33,12 @@ async def main():
     """
     # 1) Create an LLM for both agent & planner
     main_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini",
         temperature=0.7
     )
     planner_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini",
         temperature=0.3
     )

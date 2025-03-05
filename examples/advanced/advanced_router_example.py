@@ -19,11 +19,14 @@ from agentix.agents.multi_agent import AgentCapability, AdvancedAgentRouter
 from agentix.memory import ShortTermMemory
 from agentix.llms import OpenAIChat
 
+from dotenv import load_dotenv
+load_dotenv()
+
 async def main():
     """Main function demonstrating the advanced router."""
     # 1. Create specialized agents
     model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
     

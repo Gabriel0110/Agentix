@@ -25,6 +25,9 @@ setup(
         "aiohttp>=3.8.0",
         "numpy>=1.20.0",
         "python-dotenv>=1.0.0",
-        "together>=0.2.8"
+        "together>=0.2.8",
+        "tavily-python>=0.5.1",
+        "duckduckgo-search>=7.5.0",
+        "google-genai>=1.3.0"
     ],
 ) 

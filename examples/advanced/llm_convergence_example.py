@@ -17,13 +17,16 @@ from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory, CompositeMemory
 from agentix.agents.multi_agent import LLMConvergenceChecker, AdvancedAgentTeam
 
+from dotenv import load_dotenv
+load_dotenv()
+
 async def main():
     """
     Example demonstrating how to use LLM convergence checker with a team of agents.
     """
     # Initialize our LLM
     model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
     
@@ -102,7 +105,7 @@ async def main():
     
     # Create new model for the LLM convergence checker with temp of 0 (not required but recommended)
     convergence_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini",
         temperature=0
     )

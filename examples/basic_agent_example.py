@@ -7,6 +7,9 @@ from agentix.llms import OpenAIChat, TogetherChat
 from agentix.memory import ShortTermMemory
 from agentix.agents import Agent, AgentOptions
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # Callback function for token streaming
 def on_token(token):
     sys.stdout.write(token)
@@ -19,7 +22,7 @@ async def main():
     """
     # 1) Create a minimal LLM
     chat_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini",
         temperature=0.7,
         #stream=True,  # Stream output to console
@@ -27,7 +30,7 @@ async def main():
     )
 
     # chat_model = TogetherChat(
-    #     api_key=os.getenv("TOGETHER_API_KEY"),
+    #     api_key=os.environ.get("TOGETHER_API_KEY"),
     #     model="deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free",
     #     temperature=0.7,
     #     #stream=True,  # Stream output to console

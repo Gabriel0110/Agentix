@@ -8,6 +8,9 @@ from agentix.memory import ShortTermMemory
 from agentix.llms import OpenAIChat
 from agentix.tools import Tool
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # Dummy tool
 class DummyMathTool(Tool):
     """A dummy math tool that always returns 42."""
@@ -30,7 +33,7 @@ async def main():
     """
     # 1) Create LLM
     model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini",
         temperature=0.6
     )

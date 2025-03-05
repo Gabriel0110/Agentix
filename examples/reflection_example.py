@@ -19,13 +19,16 @@ from agentix.agents import Agent, AgentOptions, AgentHooks
 from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory, ReflectionMemory, CompositeMemory
 
+from dotenv import load_dotenv
+load_dotenv()
+
 async def main():
     """
     Example demonstrating an agent that uses reflection memory.
     """
     # 1) Create the main model
     chat_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini",
         temperature=0.7
     )

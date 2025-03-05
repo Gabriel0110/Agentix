@@ -20,6 +20,9 @@ from agentix.agents.multi_agent import AdvancedAgentTeam, TeamConfiguration, Age
 from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory, CompositeMemory
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # Different types of convergence checks
 def convergence_checks():
     """
@@ -58,11 +61,11 @@ async def main():
     
     # Initialize LLMs
     model1 = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
     model2 = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
     
@@ -279,7 +282,7 @@ async def main():
     
     # Aggregator agent merges final answers succinctly
     aggregator_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
     aggregator_agent = Agent.create(

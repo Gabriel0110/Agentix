@@ -15,6 +15,8 @@ from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory
 from agentix.tools import YFinanceToolkit
 
+from dotenv import load_dotenv
+load_dotenv()
 
 async def main():
     """
@@ -25,13 +27,13 @@ async def main():
     
     # 1) Create LLM models
     agent_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
     
     # This model will be used just for prompt generation
     prompt_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o",  # Use a stronger model for prompt generation
         temperature=0.2
     )

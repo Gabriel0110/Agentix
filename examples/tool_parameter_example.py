@@ -16,6 +16,9 @@ from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory
 from agentix.tools import Tool
 
+from dotenv import load_dotenv
+load_dotenv()
+
 @dataclass
 class SearchParams:
     """Parameters for the search tool."""
@@ -104,7 +107,7 @@ async def main():
     """Main function demonstrating the parameterized tool."""
     # Create the chat model
     chat_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini",
         temperature=0.2
     )

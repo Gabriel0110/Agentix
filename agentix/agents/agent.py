@@ -220,6 +220,7 @@ class Agent:
         self._consecutive_tool_calls = 0  # Track consecutive tool calls
         self._failed_tool_calls = {}  # Track tools that have failed
         self._last_n_tool_calls = []  # Track recent tool calls to detect stuck patterns
+        self._last_n_assistant_messages = []  # Track recent assistant messages to detect repetition
         
         self.logger.log(f"[Agent:{self.name}] Starting run", {"query": query})
         
@@ -260,6 +261,18 @@ class Agent:
             context = await self.memory.get_context_for_prompt(query)
             llm_output = await self.model.call(context)
             self.logger.log(f"[Agent:{self.name}] LLM Output:", {"llm_output": llm_output})
+            
+            # Track recent LLM outputs to detect repetition
+            self._last_n_assistant_messages.append(llm_output)
+            if len(self._last_n_assistant_messages) > 3:
+                self._last_n_assistant_messages.pop(0)  # Keep only the most recent 3
+                
+            # Check for repetitive outputs
+            is_repetitive = False
+            if len(self._last_n_assistant_messages) >= 2:
+                # Check if last two messages are identical or very similar
+                if self._last_n_assistant_messages[-1] == self._last_n_assistant_messages[-2]:
+                    is_repetitive = True
             
             # Tool usage?
             tool_request = ToolRequestParser.parse(llm_output)
@@ -341,6 +354,34 @@ class Agent:
             
             # Reset consecutive tool calls counter if we're not making a tool call
             self._consecutive_tool_calls = 0
+            
+            # Check for repetitive outputs and add guidance if needed
+            if is_repetitive:
+                self.logger.log(f"[Agent:{self.name}] Detected repetitive outputs")
+                guidance_message = (
+                    "I notice you're repeating similar responses. If you've gathered enough information, "
+                    "please provide a FINAL ANSWER: to the user's query. Remember to prefix your final response "
+                    "with 'FINAL ANSWER:' to clearly indicate you've completed the task."
+                )
+                await self.memory.add_message({
+                    "role": "system", 
+                    "content": guidance_message
+                })
+                
+                # Force a final answer if repeatedly stuck
+                if len(self._last_n_assistant_messages) >= 3 and all(m == self._last_n_assistant_messages[0] for m in self._last_n_assistant_messages):
+                    self.logger.log(f"[Agent:{self.name}] Forcing final answer after too many repetitive outputs")
+                    # Extract previous non-repetitive content as the final answer
+                    final_content = ""
+                    for msg in reversed(await self.memory.get_messages()):
+                        if msg["role"] == "assistant" and msg["content"] != self._last_n_assistant_messages[-1]:
+                            final_content = msg["content"]
+                            break
+                    
+                    if not final_content:
+                        final_content = self._last_n_assistant_messages[-1]
+                    
+                    return f"FINAL ANSWER: {final_content}"
             
             # Final answer check
             if "FINAL ANSWER:" in llm_output:
@@ -512,6 +553,9 @@ class Agent:
             "\n6. If you already have the information needed from a previous tool result, DO NOT call the same tool again."
             "\n7. Always analyze provided tool results before making additional tool calls."
             "\n8. NEVER try to use date strings directly - use the predefined period values like '1mo', '3mo', etc."
+            "\n9. ALWAYS end your conversation by providing a 'FINAL ANSWER:' response when you've gathered sufficient information."
+            "\n10. DO NOT just ask if the user has more questions without providing a 'FINAL ANSWER:' first."
+            "\n11. Your FINAL ANSWER should be comprehensive and directly address the user's query."
         )
         
         lines.extend(self.instructions)

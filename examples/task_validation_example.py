@@ -5,15 +5,18 @@ from agentix.agents import Agent, AgentOptions
 from agentix.memory import ShortTermMemory
 from agentix.llms import OpenAIChat
 
+from dotenv import load_dotenv
+load_dotenv()
+
 async def runValidatedAgent():
   # Optionally use different models or the same model for both the agent and validation
   main_model = OpenAIChat(
-    api_key=os.getenv("OPENAI_API_KEY"),
+    api_key=os.environ.get("OPENAI_API_KEY"),
     model="gpt-4o-mini"
   )
 
   validator_model = OpenAIChat(
-    api_key=os.getenv("OPENAI_API_KEY"),
+    api_key=os.environ.get("OPENAI_API_KEY"),
     model="gpt-4o-mini"
   )
 

@@ -2,9 +2,13 @@ import asyncio
 import os
 from agentix.llms.together_chat import TogetherChat
 
+from dotenv import load_dotenv
+load_dotenv()
+
 async def main():
     # Initialize the Together chat client
     chat = TogetherChat(
+        api_key=os.environ.get("TOGETHER_API_KEY"),
         model="meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
         temperature=0.7
     )
@@ -21,6 +25,7 @@ async def main():
     
     # Example 2: Streaming chat completion
     streaming_chat = TogetherChat(
+        api_key=os.environ.get("TOGETHER_API_KEY"),
         model="meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
         temperature=0.7,
         stream=True,
@@ -32,6 +37,7 @@ async def main():
     
     # Example 3: Vision capabilities (if using a vision-enabled model)
     vision_chat = TogetherChat(
+        api_key=os.environ.get("TOGETHER_API_KEY"),
         model="meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo",
         temperature=0.7
     )

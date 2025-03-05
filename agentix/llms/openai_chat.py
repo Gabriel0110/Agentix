@@ -6,8 +6,12 @@ import asyncio
 from openai import OpenAI, AsyncOpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
+from .types import LLM
 
-class OpenAIChat:
+from dotenv import load_dotenv
+load_dotenv()
+
+class OpenAIChat(LLM):
     """
     A wrapper for OpenAI's chat completion API using the official Python client.
     

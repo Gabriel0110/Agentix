@@ -10,6 +10,19 @@ from .yfinance_tools import (
     FinancialStatementsTool, 
     YFinanceToolkit
 )
+from .duckduckgo_tools import (
+    DuckDuckGoTextSearchTool,
+    DuckDuckGoImageSearchTool,
+    DuckDuckGoVideoSearchTool,
+    DuckDuckGoNewsSearchTool,
+    DuckDuckGoChatTool,
+    DuckDuckGoToolkit
+)
+from .tavily_tools import (
+    TavilySearchTool,
+    TavilyExtractTool,
+    TavilyToolkit
+)
 
 __all__ = [
     "Tool",
@@ -23,5 +36,14 @@ __all__ = [
     "StockHistoricalPricesTool",
     "StockFundamentalsTool",
     "FinancialStatementsTool",
-    "YFinanceToolkit"
+    "YFinanceToolkit",
+    "DuckDuckGoTextSearchTool",
+    "DuckDuckGoImageSearchTool",
+    "DuckDuckGoVideoSearchTool",
+    "DuckDuckGoNewsSearchTool",
+    "DuckDuckGoChatTool",
+    "DuckDuckGoToolkit",
+    "TavilySearchTool",
+    "TavilyExtractTool",
+    "TavilyToolkit"
 ] 

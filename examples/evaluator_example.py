@@ -7,13 +7,16 @@ from agentix.evaluators import SimpleEvaluator
 from agentix.memory import ShortTermMemory
 from agentix.llms import OpenAIChat
 
+from dotenv import load_dotenv
+load_dotenv()
+
 async def main():
     """
     Example demonstrating how to evaluate an agent's responses.
     """
     # 1) Create a model for the agent
     agent_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
 
@@ -36,7 +39,7 @@ async def main():
 
     # 4) Create a model for the evaluator
     eval_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
 

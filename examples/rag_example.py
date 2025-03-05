@@ -11,6 +11,9 @@ from agentix.memory import (
 )
 from agentix.llms import OpenAIChat, OpenAIEmbeddings
 
+from dotenv import load_dotenv
+load_dotenv()
+
 async def main():
     """
     Example demonstrating a RAG (Retrieval-Augmented Generation) agent with
@@ -18,19 +21,19 @@ async def main():
     """
     # 1) Chat model
     chat_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
 
     # 2) Summarizer model
     summarizer_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
 
     # 3) Embeddings for long-term
     embeddings_model = OpenAIEmbeddings(
-        api_key=os.getenv("OPENAI_API_KEY")
+        api_key=os.environ.get("OPENAI_API_KEY")
     )
 
     # 4) Memory instances

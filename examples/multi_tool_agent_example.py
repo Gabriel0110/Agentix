@@ -9,6 +9,9 @@ from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory
 from agentix.tools import Tool
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # Dummy tool #1
 class FakeSearchTool(Tool):
     """A dummy search tool that returns fake results."""
@@ -47,7 +50,7 @@ async def main():
     """
     # 1) Create LLM
     chat_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini",
         temperature=0.7
     )

@@ -4,9 +4,12 @@ import json
 import asyncio
 
 from together import Together, AsyncTogether
+from .types import LLM
 
+from dotenv import load_dotenv
+load_dotenv()
 
-class TogetherChat:
+class TogetherChat(LLM):
     """
     A wrapper for Together.ai's chat completion API using their official Python client.
     

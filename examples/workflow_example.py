@@ -15,10 +15,13 @@ from agentix.workflow import Workflow, WorkflowStep, LLMCallStep
 from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory
 
+from dotenv import load_dotenv
+load_dotenv()
+
 async def main():
   # Create a model
   model = OpenAIChat(
-    api_key=os.getenv("OPENAI_API_KEY"),
+    api_key=os.environ.get("OPENAI_API_KEY"),
     model="gpt-4o-mini",
     temperature=0.7,
   )

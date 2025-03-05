@@ -6,17 +6,20 @@ from agentix.agents import Agent, AgentTeam, AgentOptions
 from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory
 
+from dotenv import load_dotenv
+load_dotenv()
+
 async def main():
     """
     Example demonstrating how to use AgentTeam with parallel and sequential execution.
     """
     # 1) Create base LLMs
     agent1_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
     agent2_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
 

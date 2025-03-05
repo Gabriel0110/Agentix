@@ -16,6 +16,9 @@ from agentix.memory import ShortTermMemory
 from agentix.agents import Agent, AgentOptions
 from agentix.tools import YFinanceToolkit
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # Callback function for token streaming
 def on_token(token):
     sys.stdout.write(token)
@@ -29,7 +32,7 @@ async def main():
     
     # 1) Create a chat model with appropriate settings
     chat_model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini",  # Using a more capable model for financial analysis
         temperature=0.2,  # Lower temperature for more factual/precise responses
         #stream=True,  # Stream output to console

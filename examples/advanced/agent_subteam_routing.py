@@ -16,6 +16,9 @@ from agentix.agents.multi_agent import AgentRouter, AgentTeam
 from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory
 
+from dotenv import load_dotenv
+load_dotenv()
+
 async def main():
     """
     Main function demonstrating agent subteam routing.
@@ -23,7 +26,7 @@ async def main():
     """
     # Create the base model
     model = OpenAIChat(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
     
