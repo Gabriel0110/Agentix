@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from ..agent import Agent
 from .agent_router import AgentRouter
-from ...llms import LLM
+from ...llms import OpenAIChat, LLM
 from ...utils.debug_logger import DebugLogger
 
 
@@ -25,6 +25,7 @@ class RouterOptions:
     debug: bool = False
     fallback_index: Optional[int] = None
     confidence_threshold: float = 0.7
+    router_llm: Optional[LLM] = None  # Optional custom LLM for routing
 
 
 @dataclass
@@ -76,10 +77,14 @@ class AdvancedAgentRouter(AgentRouter):
         
         self.router_llm = None
         if options.use_llm:
-            self.router_llm = LLM(
-                model="gpt-4o-mini",
-                temperature=0.2  # Lower temperature for more consistent routing
-            )
+            # Use provided LLM if available, otherwise create default
+            if options.router_llm:
+                self.router_llm = options.router_llm
+            else:
+                self.router_llm = OpenAIChat(
+                    model="gpt-4o-mini",
+                    temperature=0.2  # Lower temperature for more consistent routing
+                )
         
         self.routing_history: List[RoutingMetadata] = []
     

@@ -15,7 +15,7 @@ import os
 import asyncio
 
 from agentix.agents import Agent, AgentOptions
-from agentix.agents.multi_agent import AgentCapability, AdvancedAgentRouter
+from agentix.agents.multi_agent import AgentCapability, AdvancedAgentRouter, RouterOptions
 from agentix.memory import ShortTermMemory
 from agentix.llms import OpenAIChat
 
@@ -107,12 +107,13 @@ async def main():
     router = AdvancedAgentRouter(
         [finance_agent, legal_agent, general_agent],
         capabilities,
-        config={
-            "use_llm": True,  # LLM-powered routing
-            "debug": True,
-            "fallback_index": 2,  # General agent as fallback
-            "confidence_threshold": 0.8  # Minimum confidence for routing
-        }
+        options=RouterOptions(
+            use_llm=True,  # LLM-powered routing,
+            router_llm=model,
+            debug=True,
+            fallback_index=2,  # General agent as fallback
+            confidence_threshold=0.8  # Minimum confidence for routing
+        )
     )
     
     # 4. Test queries
@@ -143,11 +144,11 @@ async def main():
     
     for i, entry in enumerate(history):
         print(f"\nQuery {i + 1}:")
-        print(f"Query: \"{entry['query']}\"")
-        print(f"Routed to: {entry['selected_agent']}")
-        print(f"Confidence: {entry['confidence']:.2f}")
-        if entry.get('reasoning'):
-            print(f"Reasoning: {entry['reasoning']}")
+        print(f"Query: \"{entry.query}\"")
+        print(f"Routed to: {entry.selected_agent}")
+        print(f"Confidence: {entry.confidence:.2f}")
+        if entry.reasoning:
+            print(f"Reasoning: {entry.reasoning}")
         print("-" * 30)
 
 
