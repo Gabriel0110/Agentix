@@ -1,0 +1,18 @@
+include LICENSE
+include README.md
+include pyproject.toml
+include agentix/py.typed
+
+# Include any important package data
+recursive-include agentix *.json
+recursive-include agentix *.yaml
+recursive-include agentix *.yml
+
+# Exclude development and test files
+exclude .gitignore
+exclude .git
+recursive-exclude * __pycache__
+recursive-exclude * *.py[cod]
+recursive-exclude tests *
+recursive-exclude examples *
+recursive-exclude docs * 

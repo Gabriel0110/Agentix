@@ -1,9 +1,17 @@
 
+<div align="center">
+<img src="agentix.png" alt="Agentix Framework"/>
+</div>
+
 [![GitHub stars](https://img.shields.io/github/stars/gabriel0110/agentix?style=flat-square)](https://github.com/gabriel0110/agentix/stargazers)
 [![GitHub issues](https://img.shields.io/github/issues/gabriel0110/agentix?style=flat-square)](https://github.com/gabriel0110/agentix/issues)
 [![GitHub license](https://img.shields.io/github/license/gabriel0110/agentix?style=flat-square)](./LICENSE)  
 
 # Agentix Framework
+
+<div align="center">
+<i>"Ah yes, yet another LLM-loop wrapper..."</i>
+</div><br>
 
 A **simple and extensible** Python framework for building AI-powered agents based on the original [Webby-Agents](https://github.com/gabriel0110/webby-agents) web-native TypeScript framework. This framework provides the core building blocks needed to integrate Large Language Models (LLMs) into applications and empower them with “agentic” capabilities. The goal is to provide simplicity but also customization and extensibility for more advanced use cases ***if you so desire***.
 
