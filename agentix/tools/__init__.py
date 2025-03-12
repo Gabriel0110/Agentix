@@ -24,6 +24,13 @@ from .tavily_tools import (
     TavilyExtractTool,
     TavilyToolkit
 )
+from .firecrawl_tools import (
+    FirecrawlScrapeTool,
+    FirecrawlCrawlTool,
+    FirecrawlStatusTool,
+    FirecrawlMapTool,
+    FirecrawlToolkit
+)
 
 __all__ = [
     "Tool",
@@ -47,5 +54,10 @@ __all__ = [
     "TavilySearchTool",
     "TavilyExtractTool",
     "TavilyToolkit",
+    "FirecrawlScrapeTool",
+    "FirecrawlCrawlTool",
+    "FirecrawlStatusTool",
+    "FirecrawlMapTool",
+    "FirecrawlToolkit",
     "function_tool"
 ] 
