@@ -342,10 +342,12 @@ class Agent:
                 
                 # Store tool results with a more distinctive format
                 await self.memory.add_message({
-                    "role": "function", 
-                    "name": tool_request.tool_name,
-                    "content": f"TOOL RESULT: {result}",
-                    "metadata": {"type": "tool_result"}
+                    "role": "assistant",
+                    "content": f"Tool '{tool_request.tool_name}' returned: {result}",
+                    "metadata": {
+                        "type": "tool_result",
+                        "tool_name": tool_request.tool_name
+                    }
                 })
                 
                 continue  # Next iteration
@@ -373,7 +375,7 @@ class Agent:
                     self.logger.log(f"[Agent:{self.name}] Forcing final answer after too many repetitive outputs")
                     # Extract previous non-repetitive content as the final answer
                     final_content = ""
-                    for msg in reversed(await self.memory.get_messages()):
+                    for msg in reversed(await self.memory.get_context()):
                         if msg["role"] == "assistant" and msg["content"] != self._last_n_assistant_messages[-1]:
                             final_content = msg["content"]
                             break
@@ -385,7 +387,19 @@ class Agent:
             
             # Final answer check
             if "FINAL ANSWER:" in llm_output:
-                final_ans = llm_output.split("FINAL ANSWER:")[1].strip()
+                # Check if FINAL ANSWER is at the start or end
+                parts = llm_output.split("FINAL ANSWER:")
+                if len(parts) != 2:
+                    # Multiple FINAL ANSWER markers - take the last one
+                    final_ans = parts[-1].strip()
+                else:
+                    # If FINAL ANSWER is at the start, take what's after
+                    # If it's at the end, take what's before
+                    if parts[0].strip() == "":
+                        final_ans = parts[1].strip()
+                    else:
+                        final_ans = parts[0].strip()
+                
                 self.logger.log(f"[Agent:{self.name}] Final answer found", {"final_ans": final_ans})
                 
                 # Add final answer to memory
@@ -547,15 +561,17 @@ class Agent:
             "\nImportant guidelines:"
             "\n1. After using tools to gather information, you MUST provide a final answer to the user."
             "\n2. Do not repeat the same tool calls unnecessarily."
-            "\n3. Once you have the information needed, use 'FINAL ANSWER:' to respond directly to the user."
+            "\n3. When you have gathered sufficient information and are ready to provide your final response:"
+            "\n   - Start your response with 'FINAL ANSWER:' followed by your complete answer"
+            "\n   - Put 'FINAL ANSWER:' at the START of your response, not at the end"
+            "\n   - Include all relevant information in your final answer"
+            "\n   - Make your final answer comprehensive and directly address the user's query"
             "\n4. When you see 'TOOL RESULT:' in the conversation, this means you've already received a response from that tool."
             "\n5. PAY CLOSE ATTENTION to previous tool results in the conversation before making new tool calls."
             "\n6. If you already have the information needed from a previous tool result, DO NOT call the same tool again."
             "\n7. Always analyze provided tool results before making additional tool calls."
             "\n8. NEVER try to use date strings directly - use the predefined period values like '1mo', '3mo', etc."
-            "\n9. ALWAYS end your conversation by providing a 'FINAL ANSWER:' response when you've gathered sufficient information."
-            "\n10. DO NOT just ask if the user has more questions without providing a 'FINAL ANSWER:' first."
-            "\n11. Your FINAL ANSWER should be comprehensive and directly address the user's query."
+            "\n9. DO NOT just ask if the user has more questions without providing a 'FINAL ANSWER:' first."
         )
         
         lines.extend(self.instructions)

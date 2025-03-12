@@ -1,10 +1,29 @@
 from typing import List, Dict, Any, Optional, Union, Callable, Awaitable
 import json
 import time
-
+from dataclasses import dataclass
 from ...llms import LLM
 from ...utils.debug_logger import DebugLogger
 
+@dataclass
+class ConvergenceCriteria:
+    """Criteria for determining content convergence."""
+    required_elements: Optional[List[str]] = None  # Required content elements
+    required_structure: Optional[List[str]] = None  # Required structural elements
+    minimum_length: Optional[int] = None  # Minimum content length
+    custom_instructions: Optional[List[str]] = None  # Additional checking instructions
+
+    def _get_criteria_list(self) -> List[str]:
+        criteria_list = []
+        if self.required_elements:
+            criteria_list.extend(self.required_elements)
+        if self.required_structure:
+            criteria_list.extend(self.required_structure)
+        if self.minimum_length:
+            criteria_list.append(f"Content must be at least {self.minimum_length} characters long")
+        if self.custom_instructions:
+            criteria_list.extend(self.custom_instructions)
+        return criteria_list
 
 class LLMConvergenceChecker:
     """
@@ -16,19 +35,19 @@ class LLMConvergenceChecker:
     
     def __init__(
         self,
-        llm: LLM,
-        criteria: List[str],
+        model: LLM,
+        criteria: ConvergenceCriteria,
         debug: bool = False
     ):
         """
         Initialize a new LLM convergence checker.
         
         Args:
-            llm: The LLM to use for checking (OpenAIChat or TogetherChat)
-            criteria: List of criteria to check against
+            model: The LLM to use for checking (OpenAIChat or TogetherChat)
+            criteria: ConvergenceCriteria object containing criteria to check against
             debug: Whether to enable debug logging
         """
-        self.llm = llm
+        self.model = model
         self.criteria = criteria
         self.logger = DebugLogger(debug)
         self.history: List[Dict[str, Any]] = []
@@ -43,15 +62,31 @@ class LLMConvergenceChecker:
         Returns:
             A prompt for the LLM
         """
-        criteria_text = "\n".join([
-            f"{i+1}. {criterion}" for i, criterion in enumerate(self.criteria)
-        ])
+        criteria_list = []
+        
+        if self.criteria.required_elements:
+            criteria_list.append(
+                f"Content must include these elements: {', '.join(self.criteria.required_elements)}"
+            )
+        
+        if self.criteria.required_structure:
+            criteria_list.append(
+                f"Content must have these structural elements: {', '.join(self.criteria.required_structure)}"
+            )
+        
+        if self.criteria.minimum_length:
+            criteria_list.append(
+                f"Content must be at least {self.criteria.minimum_length} characters long"
+            )
+        
+        if self.criteria.custom_instructions:
+            criteria_list.extend(self.criteria.custom_instructions)
         
         return f"""
 You are a quality assurance evaluator for an AI assistant. Your job is to determine if the following content meets the specified criteria:
 
 CRITERIA:
-{criteria_text}
+{chr(10).join([f"- {c}" for c in criteria_list])}
 
 CONTENT TO EVALUATE:
 {content}
@@ -87,10 +122,10 @@ You must respond in JSON format only with the following structure:
         try:
             self.logger.log("Checking convergence", {
                 "content_length": len(content),
-                "criteria_count": len(self.criteria)
+                "criteria_count": len(self.criteria._get_criteria_list())
             })
             
-            llm_response = await self.llm.call([
+            llm_response = await self.model.call([
                 {"role": "system", "content": "You are a helpful assistant specializing in content evaluation."},
                 {"role": "user", "content": prompt}
             ])
