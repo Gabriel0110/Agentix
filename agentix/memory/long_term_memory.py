@@ -1,6 +1,6 @@
 import time
 import uuid
-from typing import List, Dict, Any, Union, Optional
+from typing import List, Dict, Any, Union
 
 from .memory import Memory, ConversationMessage
 from .vector_store import InMemoryVectorStore, VectorStoreItem

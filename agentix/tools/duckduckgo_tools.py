@@ -6,9 +6,7 @@ DuckDuckGo search engine. It offers text search, image search, video search, new
 and access to DuckDuckGo's AI chat capabilities.
 """
 
-import json
-from typing import Any, Dict, List, Optional, Union
-import os
+from typing import Any, Dict, List, Optional
 
 from .tools import Tool, ToolParameter, ToolDocumentation
 

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any
+from typing import List
 
 from .tools.tools import Tool
 from .memory.memory import Memory

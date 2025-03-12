@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Callable, Union, Awaitable
 
 from .llms import LLM
-from .memory.memory import Memory, ConversationMessage, MemoryRole
+from .memory.memory import Memory, ConversationMessage
 
 
 class WorkflowStep(ABC):

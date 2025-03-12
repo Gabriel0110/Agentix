@@ -1,6 +1,6 @@
-from typing import List, Dict, Any, Union, Optional
+from typing import List, Dict, Any, Union
 
-from .memory import Memory, ConversationMessage, MemoryRole
+from .memory import Memory, ConversationMessage
 
 
 class ReflectionMemory(Memory):

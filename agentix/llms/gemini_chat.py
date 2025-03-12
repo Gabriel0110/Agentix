@@ -6,10 +6,8 @@ It supports text generation, multimodal input (text + images), streaming, and ad
 configuration options.
 """
 
-import base64
 import os
-import json
-from typing import Any, Callable, Dict, List, Optional, Union, AsyncGenerator
+from typing import Callable, Dict, List, Optional, AsyncGenerator
 
 from dotenv import load_dotenv
 load_dotenv()

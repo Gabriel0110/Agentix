@@ -8,7 +8,7 @@ content extraction, and hybrid RAG capabilities.
 
 import json
 import os
-from typing import Any, Dict, List, Optional, Union, Callable
+from typing import Any, Dict, List, Optional
 
 from .tools import Tool, ToolParameter, ToolDocumentation
 

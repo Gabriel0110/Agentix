@@ -1,10 +1,7 @@
 import os
-from typing import List, Dict, Any, Optional, Callable, AsyncGenerator
-import json
-import asyncio
+from typing import List, Dict, Optional, Callable
 
 from openai import OpenAI, AsyncOpenAI
-from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from .types import LLM
 

@@ -1,4 +1,4 @@
-from typing import Protocol, List, Dict, Any, TypeVar, runtime_checkable
+from typing import Protocol, List, Dict, runtime_checkable
 
 @runtime_checkable
 class LLMProtocol(Protocol):

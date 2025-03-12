@@ -1,9 +1,6 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 import numpy as np
-import time
-import uuid
-
 
 @dataclass
 class VectorStoreItem:

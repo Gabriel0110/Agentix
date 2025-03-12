@@ -1,9 +1,8 @@
-import json
+
 from typing import Optional, Dict, Any, List
 
 from .tools import Tool
 from .tool_metadata import ToolParameter, ToolDocumentation
-from .tool_error import ToolError
 
 try:
     import yfinance as yf
