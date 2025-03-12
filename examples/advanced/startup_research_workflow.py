@@ -837,37 +837,10 @@ async def main():
     # Initialize the workflow
     workflow = StartupResearchWorkflow(debug=True)
     
-    # Define example queries for different complexity levels
-    simple_queries = [
-        "What are the latest funding rounds for AI startups in healthcare?",
-        #"Summarize recent developments in climate tech startups"
-    ]
-    
     complex_queries = [
         "Analyze emerging trends in AI startups focusing on enterprise applications, including recent funding patterns, technology adoption trends, and potential market opportunities",
         #"Research the intersection of blockchain and sustainability startups, including funding rounds, technological innovations, and market challenges"
     ]
-    
-    # Process simple queries using the router to select individual agents
-    # print("\n" + "=" * 80)
-    # print("📱 PROCESSING SINGLE-AGENT QUERIES")
-    # print("=" * 80)
-    
-    # for query in simple_queries:
-    #     result = await workflow.process_single_query(query)
-        
-    #     print("\n" + "-" * 60)
-    #     print(f"Query: {query}")
-    #     print(f"Processing time: {result['processing_time']:.2f} seconds")
-        
-    #     if "evaluation" in result:
-    #         print(f"Evaluation score: {result['evaluation'].score:.2f}/1.0")
-    #         print(f"Feedback: {result['evaluation'].feedback}")
-        
-    #     print("\nResult:")
-    #     print("-" * 40)
-    #     print(result["result"])
-    #     print("-" * 60)
     
     # Generate a research plan for a complex query
     plan_query = complex_queries[0]
