@@ -3,11 +3,9 @@
 <img src="agentix.png" alt="Agentix Framework"/>
 </div>  
 
-<div align="center">
 [![GitHub stars](https://img.shields.io/github/stars/gabriel0110/agentix?style=flat-square)](https://github.com/gabriel0110/agentix/stargazers)
 [![GitHub issues](https://img.shields.io/github/issues/gabriel0110/agentix?style=flat-square)](https://github.com/gabriel0110/agentix/issues)
 [![GitHub license](https://img.shields.io/github/license/gabriel0110/agentix?style=flat-square)](./LICENSE)  
-</div>  
 
 # Agentix Framework
 
