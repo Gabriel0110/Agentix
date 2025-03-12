@@ -14,11 +14,10 @@ The core of this framework is built upon the writings of Chip Nguyen's [Agents](
 ## Key Features
 
 - **OpenAI Integration**  
-  Wrappers for OpenAI LLMs 
+
 - **Together.AI Integration**  
-  Wrapper for Together.AI LLMs 
+
 - **Google Gemini Integration**  
-  Wrapper for Google Gemini LLMs  
 
 - **Flexible Memory**  
   - **ShortTermMemory** – stores recent messages for immediate context.  
