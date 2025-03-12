@@ -7,12 +7,12 @@ This module provides:
 3. Automatic metrics collection via decorators
 4. Formatted reporting
 """
-from typing import List, Dict, Any, Optional, Type, TypeVar, Generic
+from typing import List, Dict, Any, TypeVar
 from dataclasses import dataclass, field, fields
 import time
-from abc import ABC, abstractmethod
 import functools
 import json
+import asyncio
 
 T = TypeVar('T', bound='BaseWorkflowMetrics')
 
@@ -230,6 +230,46 @@ class AgentTeamMetrics(BaseWorkflowMetrics):
             agent: (count / total) if total > 0 else 0
             for agent, count in self.agent_contributions.items()
         }
+    
+    def report(self, include_custom: bool = True) -> str:
+        """Generate a team-specific metrics report."""
+        # Get base report
+        base_report = super().report(include_custom=False)
+        
+        # Add team-specific metrics
+        team_lines = [
+            "",
+            "Team Metrics:",
+            "-------------",
+            f"Team Size: {self.team_size}",
+            f"Parallel Executions: {self.parallel_executions}",
+            f"Sequential Executions: {self.sequential_executions}",
+            f"Interleaved Executions: {self.interleaved_executions}",
+            f"Convergence Rate: {self.successful_convergence}/{self.convergence_attempts}"
+        ]
+        
+        # Add agent contributions if any
+        if self.agent_contributions:
+            team_lines.extend([
+                "",
+                "Agent Contributions:",
+                "------------------"
+            ])
+            for agent, percentage in self.get_contribution_distribution().items():
+                team_lines.append(f"{agent}: {percentage:.1%}")
+        
+        # Combine reports and add custom metrics if requested
+        report = base_report + "\n" + "\n".join(team_lines)
+        if include_custom and self._custom_metrics:
+            custom_report = "\n\nCustom Metrics:\n--------------"
+            for name, value in self._custom_metrics.items():
+                if isinstance(value, float):
+                    custom_report += f"\n{name}: {value:.2f}"
+                else:
+                    custom_report += f"\n{name}: {value}"
+            report += custom_report
+        
+        return report
 
 @dataclass
 class ResearchWorkflowMetrics(BaseWorkflowMetrics):
@@ -245,6 +285,37 @@ class ResearchWorkflowMetrics(BaseWorkflowMetrics):
     def calculate_source_efficiency(self) -> float:
         """Calculate how efficiently sources are being found."""
         return self.sources_found / self.search_queries if self.search_queries > 0 else 0
+    
+    def report(self, include_custom: bool = True) -> str:
+        """Generate a research-specific metrics report."""
+        # Get base report
+        base_report = super().report(include_custom=False)
+        
+        # Add research-specific metrics
+        research_lines = [
+            "",
+            "Research Metrics:",
+            "----------------",
+            f"Search Queries: {self.search_queries}",
+            f"Sources Found: {self.sources_found}",
+            f"Source Efficiency: {self.calculate_source_efficiency():.2f}",
+            f"Facts Extracted: {self.facts_extracted}",
+            f"Validation Runs: {self.validation_runs}",
+            f"Synthesis Rounds: {self.synthesis_rounds}"
+        ]
+        
+        # Combine reports and add custom metrics if requested
+        report = base_report + "\n" + "\n".join(research_lines)
+        if include_custom and self._custom_metrics:
+            custom_report = "\n\nCustom Metrics:\n--------------"
+            for name, value in self._custom_metrics.items():
+                if isinstance(value, float):
+                    custom_report += f"\n{name}: {value:.2f}"
+                else:
+                    custom_report += f"\n{name}: {value}"
+            report += custom_report
+        
+        return report
 
 # Example usage:
 """
