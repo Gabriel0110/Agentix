@@ -14,9 +14,12 @@ The core of this framework is built upon the writings of Chip Nguyen's [Agents](
 ## Key Features
 
 - **OpenAI Integration**  
-  Wrappers for OpenAI ChatCompletion and Embeddings (including support for streaming partial tokens).  
+  Wrappers for OpenAI LLMs 
 - **Together.AI Integration**  
-  Wrapper for Together.AI ChatCompletion  
+  Wrapper for Together.AI LLMs 
+- **Google Gemini Integration**  
+  Wrapper for Google Gemini LLMs  
+
 - **Flexible Memory**  
   - **ShortTermMemory** – stores recent messages for immediate context.  
   - **SummarizingMemory** – automatically summarizes older messages to keep the context manageable (supports optional hierarchical chunk-based summarization).  
@@ -33,6 +36,12 @@ The core of this framework is built upon the writings of Chip Nguyen's [Agents](
 - **Tool Usage**  
   Agents can call custom external “Tools” in a multi-step loop, retrieving data and incorporating it into final answers. You can extend the `Tool` interface for your own use cases.
     - **Parameterized Tools** – tools that take input parameters for more dynamic behavior. See the `tool_parameter_demo.ts` example on how to call tools with required and optional parameters.
+    - **Function-based Tools** – tools that are defined as Python functions.
+    - **Example Tools**
+      - **Firecrawl** – scrape and crawl websites (https://firecrawl.dev/)
+      - **YFinance** – get stock market data.
+      - **DuckDuckGoSearch** – search the web using DuckDuckGo.
+      - **Tavily** - search the web using Tavily (https://tavily.com/)
 
 - **Safety Controls**  
   Configure max reflection steps, usage limits, time-to-live, plus hooks for user approval on tool calls and task validation.
