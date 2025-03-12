@@ -2,6 +2,7 @@ from .tools import Tool
 from .tool_metadata import ToolParameter, ToolDocumentation
 from .tool_error import ToolError
 from .tool_request import ParsedToolRequest, ToolRequestParser
+from .function_tools import function_tool
 from .yfinance_tools import (
     StockPriceTool, 
     CompanyInfoTool, 
@@ -45,5 +46,6 @@ __all__ = [
     "DuckDuckGoToolkit",
     "TavilySearchTool",
     "TavilyExtractTool",
-    "TavilyToolkit"
+    "TavilyToolkit",
+    "function_tool"
 ] 
