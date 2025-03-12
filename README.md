@@ -45,8 +45,9 @@ The core of this framework is built upon the writings of Chip Nguyen's [Agents](
 - **Safety Controls**  
   Configure max reflection steps, usage limits, time-to-live, plus hooks for user approval on tool calls and task validation.
 
-- **Debug Logging & Hooks**  
-  Add custom hooks for logging, debugging, or user approval on tool calls. You can enable agent debugging for more detailed logs via the `debug` option, setting it to `true`.
+- **Observability**  
+  - Agent and Team Metrics via `metrics/workflow_metrics.py`
+  - Logging and Tracing via agent and team hooks. Debug logging can be enabled via the `debug` agent option, setting it to `true`.
 
 - **Lightweight & Modular**  
   Use only the parts you need, or extend them for advanced use cases (e.g., reflection memory, external vector DBs).
