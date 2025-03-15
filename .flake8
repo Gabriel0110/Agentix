@@ -1,0 +1,30 @@
+[flake8]
+max-line-length = 120
+extend-ignore = 
+    # Temporarily ignored while cleaning up
+    E203,  # whitespace before ':'
+    W503,  # line break before binary operator
+    W291,  # trailing whitespace
+    W292,  # no newline at end of file
+    W293,  # blank line contains whitespace
+    E302,  # expected 2 blank lines
+    E305,  # expected 2 blank lines after class
+    F401,  # unused imports (temporary)
+    F541,  # f-string missing placeholders (temporary)
+    F841,  # unused variables (temporary)
+    
+exclude = 
+    .git,
+    __pycache__,
+    build,
+    dist,
+    *.egg-info,
+    venv,
+    .env,
+    .venv,
+    examples/*
+
+per-file-ignores =
+    __init__.py: F401
+    
+max-complexity = 30
