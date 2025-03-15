@@ -99,7 +99,7 @@ The core of this framework is built upon the writings of Chip Nguyen's [Agents](
 ## Installation
 
 ```bash
-pip install agentix
+pip install agentix-lib
 ```
 
 ---
