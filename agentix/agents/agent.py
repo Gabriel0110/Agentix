@@ -10,6 +10,7 @@ from ..tools.tools import Tool
 from ..planner import Planner
 from ..tools.tool_request import ToolRequestParser, ParsedToolRequest
 from ..utils.debug_logger import DebugLogger
+from ..metrics.workflow_metrics import BaseWorkflowMetrics
 
 @dataclass
 class AgentOptions:
@@ -48,7 +49,8 @@ class Agent:
                  options: Optional[Union[AgentOptions, Dict[str, Any]]] = None,
                  hooks: Optional[AgentHooks] = None,
                  task: Optional[str] = None,
-                 validation_model: Optional[LLM] = None):
+                 validation_model: Optional[LLM] = None,
+                 metrics: Optional[BaseWorkflowMetrics] = None):
         """
         Initialize an agent with the given parameters.
         """
@@ -62,6 +64,9 @@ class Agent:
         
         self.task = task
         self.validation_model = validation_model
+        
+        # Initialize metrics
+        self.metrics = metrics or BaseWorkflowMetrics()
         
         # Options - handle both dict and AgentOptions
         if options is None:
@@ -91,10 +96,17 @@ class Agent:
         else:
             self.use_reflection = options.use_reflection
             
-        # Internal counters
+        # Initialize tracking attributes
         self.llm_calls_used = 0
         self.start_time = 0
         self.step_count = 0
+        
+        # Initialize tool tracking
+        self._tool_usage_counter = {}
+        self._consecutive_tool_calls = 0
+        self._failed_tool_calls = {}
+        self._last_n_tool_calls = []
+        self._last_n_assistant_messages = []
     
     @classmethod
     def create(cls, 
@@ -107,7 +119,8 @@ class Agent:
                options: Optional[Union[AgentOptions, Dict[str, Any]]] = None,
                hooks: Optional[AgentHooks] = None,
                task: Optional[str] = None,
-               validation_model: Optional[LLM] = None) -> 'Agent':
+               validation_model: Optional[LLM] = None,
+               metrics: Optional[BaseWorkflowMetrics] = None) -> 'Agent':
         """
         Factory method to create an Agent instance.
         
@@ -122,6 +135,7 @@ class Agent:
             hooks: Lifecycle hooks for debugging or advanced usage
             task: The user's stated task (for validation context)
             validation_model: Optional separate model for validation
+            metrics: Optional metrics tracker for the agent
             
         Returns:
             An initialized Agent
@@ -136,7 +150,8 @@ class Agent:
             options=options,
             hooks=hooks,
             task=task,
-            validation_model=validation_model
+            validation_model=validation_model,
+            metrics=metrics
         )
     
     @classmethod
@@ -216,11 +231,6 @@ class Agent:
         """
         self.start_time = int(time.time() * 1000)  # current time in ms
         self.step_count = 0
-        self._tool_usage_counter = {}  # Initialize tool usage counter
-        self._consecutive_tool_calls = 0  # Track consecutive tool calls
-        self._failed_tool_calls = {}  # Track tools that have failed
-        self._last_n_tool_calls = []  # Track recent tool calls to detect stuck patterns
-        self._last_n_assistant_messages = []  # Track recent assistant messages to detect repetition
         
         self.logger.log(f"[Agent:{self.name}] Starting run", {"query": query})
         
@@ -481,15 +491,59 @@ class Agent:
         plan = await self.planner.generate_plan(query, self.tools, self.memory)
         if self.hooks.on_plan_generated:
             self.hooks.on_plan_generated(plan)
+            
+        # Format the plan nicely for logging
+        try:
+            import json
+            parsed_plan = json.loads(plan)
+            formatted_plan = json.dumps(parsed_plan, indent=2)
+            
+            # Create a summary of the plan
+            plan_summary = "\n".join([
+                f"Step {i+1}: {step['action'].upper()} - {step['details'][:60]}..."
+                for i, step in enumerate(parsed_plan)
+            ])
+            
+            self.logger.log(f"[Agent:{self.name}] Generated Plan:", {
+                "total_steps": len(parsed_plan),
+                "summary": plan_summary,
+                "full_plan": formatted_plan
+            })
+            
+        except json.JSONDecodeError:
+            self.logger.error(f"[Agent:{self.name}] Failed to parse plan for formatting", {
+                "raw_plan": plan
+            })
         
         steps = self.parse_plan(plan)
-        for step in steps:
+        for i, step in enumerate(steps, 1):
+            # Format the current step nicely
+            try:
+                step_formatted = json.dumps(step, indent=2)
+            except:
+                step_formatted = str(step)
+                
+            self.logger.log(f"[Agent:{self.name}] Executing step {i}/{len(steps)}", {
+                "step_details": step_formatted,
+                "action": step.get("action"),
+                "details": step.get("details")
+            })
+            
             step_response = await self.execute_plan_step(step, query)
             await self.memory.add_message({"role": "assistant", "content": step_response})
+            
+            self.logger.log(f"[Agent:{self.name}] Step {i} completed", {
+                "response": step_response
+            })
             
             if "FINAL ANSWER" in step_response:
                 # Extract the final answer string
                 final_answer = step_response.replace("FINAL ANSWER:", "").strip()
+                
+                self.logger.log(f"[Agent:{self.name}] Plan execution completed with final answer", {
+                    "total_steps_executed": i,
+                    "final_answer": final_answer
+                })
                 
                 # Validate if required
                 if self.validate_output and self.validation_model:
@@ -502,6 +556,9 @@ class Agent:
                 
                 return final_answer
         
+        self.logger.log(f"[Agent:{self.name}] Plan execution completed without final answer", {
+            "total_steps": len(steps)
+        })
         return "Plan executed but no final answer was found."
     
     def build_system_prompt(self) -> str:
@@ -590,22 +647,178 @@ class Agent:
     
     async def execute_plan_step(self, step: Dict[str, str], query: str) -> str:
         """
-        Execute a single step from a plan
+        Execute a single step from a plan with enhanced error handling and result processing
         """
         action = step.get("action", "")
         details = step.get("details", "")
+        args = step.get("args", {})
         
         if action == "tool":
-            tool = next((t for t in self.tools if t.name == details), None)
-            if not tool:
-                return f'Error: Tool "{details}" not found.'
-            return await tool.run(query)
+            # Create a tool request with the arguments
+            from ..tools.tool_request import ParsedToolRequest
+            tool_request = ParsedToolRequest(
+                tool_name=details,
+                query=query,
+                args=args
+            )
+            
+            try:
+                # Increment tool call metrics
+                self.metrics.increment("total_tool_calls")
+                self.metrics.increment("total_agent_calls")
+                
+                # Validate tool exists before execution
+                tool = next(
+                    (t for t in self.tools if t.name.lower() == details.lower()),
+                    None
+                )
+                
+                if not tool:
+                    error_msg = f"Tool '{details}' not found in available tools"
+                    await self.memory.add_message({
+                        "role": "system",
+                        "content": f"Error: {error_msg}"
+                    })
+                    return error_msg
+                
+                # Validate required parameters are present
+                missing_params = []
+                if tool.parameters:
+                    for param in tool.parameters:
+                        if param.required and param.name not in args:
+                            missing_params.append(param.name)
+                
+                if missing_params:
+                    error_msg = f"Missing required parameters for tool '{details}': {', '.join(missing_params)}"
+                    await self.memory.add_message({
+                        "role": "system",
+                        "content": f"Error: {error_msg}"
+                    })
+                    return error_msg
+                
+                # Use handle_tool_request for execution
+                result = await self.handle_tool_request(tool_request)
+                
+                # Process and store the result
+                if not result:
+                    error_msg = f"Tool '{details}' returned no result"
+                    self.metrics.increment("error_count")
+                    await self.memory.add_message({
+                        "role": "system",
+                        "content": f"Warning: {error_msg}"
+                    })
+                    return error_msg
+                elif isinstance(result, str) and result.lower().startswith("error"):
+                    self.metrics.increment("error_count")
+                    await self.memory.add_message({
+                        "role": "system",
+                        "content": f"Tool execution error: {result}"
+                    })
+                else:
+                    # Store successful result
+                    await self.memory.add_message({
+                        "role": "system",
+                        "content": f"Tool '{details}' executed successfully. Result: {result}"
+                    })
+                
+                return result
+                
+            except Exception as e:
+                self.metrics.increment("error_count")
+                error_msg = f"Error executing tool {details}: {str(e)}"
+                await self.memory.add_message({
+                    "role": "system",
+                    "content": f"Exception during tool execution: {error_msg}"
+                })
+                return error_msg
+            
         elif action == "message":
-            return await self.model.call([{"role": "user", "content": details}])
+            # Process message step with context
+            try:
+                # Get relevant context from memory
+                context = await self.memory.get_context()
+                
+                # Create a prompt that includes context
+                message_prompt = [
+                    {"role": "system", "content": "You are processing the results of previous steps to continue the plan execution. Analyze the information and provide clear insights."},
+                    {"role": "user", "content": f"""
+Task: {query}
+
+Previous context:
+{context[-3:] if context else 'No previous context'}
+
+Current step message:
+{details}
+
+Provide a clear analysis of the current state and what should be done next.
+"""}
+                ]
+                
+                # Increment LLM call metrics
+                self.metrics.increment("total_llm_calls")
+                
+                # Get response from model
+                response = await self.model.call(message_prompt)
+                
+                # Store the analysis
+                await self.memory.add_message({
+                    "role": "assistant",
+                    "content": response
+                })
+                
+                return response
+                
+            except Exception as e:
+                error_msg = f"Error processing message step: {str(e)}"
+                await self.memory.add_message({
+                    "role": "system",
+                    "content": f"Error: {error_msg}"
+                })
+                return error_msg
+                
         elif action == "complete":
-            return f"FINAL ANSWER: {details}"
+            # Validate and format final answer
+            try:
+                # Get full context
+                context = await self.memory.get_context()
+                
+                # Create completion prompt
+                completion_prompt = [
+                    {"role": "system", "content": "You are finalizing the response to the user's query. Ensure the answer is complete and incorporates all relevant information from previous steps."},
+                    {"role": "user", "content": f"""
+Original query: {query}
+
+Context from previous steps:
+{context[-5:] if context else 'No previous context'}
+
+Proposed final answer:
+{details}
+
+Provide a comprehensive final answer that includes all relevant information and addresses the original query.
+"""}
+                ]
+                
+                # Get validated response
+                self.metrics.increment("total_llm_calls")
+                final_response = await self.model.call(completion_prompt)
+                
+                return f"FINAL ANSWER: {final_response}"
+                
+            except Exception as e:
+                error_msg = f"Error finalizing answer: {str(e)}"
+                await self.memory.add_message({
+                    "role": "system",
+                    "content": f"Error: {error_msg}"
+                })
+                return f"FINAL ANSWER: Error occurred while finalizing the answer. Based on available information: {details}"
+                
         else:
-            return f"Unknown action: {action}"
+            error_msg = f"Unknown action: {action}"
+            await self.memory.add_message({
+                "role": "system",
+                "content": f"Error: {error_msg}"
+            })
+            return error_msg
     
     async def handle_tool_request(self, request: ParsedToolRequest) -> str:
         """
@@ -633,72 +846,58 @@ class Agent:
                 (t for t in self.tools if t.name.lower() == request.tool_name.lower()),
                 None
             )
+            
             if not tool:
-                available_tools = ", ".join([t.name for t in self.tools])
-                return (
-                    f"Error: Tool '{request.tool_name}' is not available. "
-                    f"Available tools are: {available_tools}. "
-                    f"Please use one of these tools or provide a FINAL ANSWER: with your best response."
-                )
-            
-            # Now do the basic validation
-            validation_error = ToolRequestParser.validate_basic(request, self.tools)
-            if validation_error:
-                return f"Error: {validation_error} Please revise your tool request or provide a FINAL ANSWER:"
-            
-            # Validate parameters before calling the tool
-            try:
-                ToolRequestParser.validate_parameters(tool, request)
-            except Exception as param_err:
-                # Provide helpful feedback about parameter errors
-                params_help = "\n".join([
-                    f"  - {p.name}: {p.type} ({'required' if p.required else 'optional'}) - {p.description}"
-                    for p in tool.parameters or []
-                ])
+                error_msg = f"Tool '{request.tool_name}' not found"
+                self.logger.error(error_msg)
+                return f"Error: {error_msg}"
                 
+            # Track consecutive tool calls
+            self._consecutive_tool_calls += 1
+            self._last_n_tool_calls.append(tool_key)
+            if len(self._last_n_tool_calls) > 6:  # Keep last 6 for pattern detection
+                self._last_n_tool_calls.pop(0)
+                
+            # Check for stuck patterns
+            if self._check_for_stuck_patterns():
                 return (
-                    f"Error: Invalid parameters for tool '{tool.name}': {str(param_err)}\n"
-                    f"Tool '{tool.name}' expects these parameters:\n{params_help}\n"
-                    f"Example usage: {tool.docs.usage_example if tool.docs else 'No example available'}"
+                    "I notice we're in a loop of repetitive tool calls. "
+                    "Let's analyze what we know and provide a FINAL ANSWER with our current information."
                 )
-            
-            # Check if hook allows this
+                
+            # Call tool hooks if defined
             if self.hooks.on_tool_call:
-                proceed = await self.hooks.on_tool_call(tool.name, request.query)
-                if not proceed:
-                    self.logger.log("Tool call cancelled by hook", {"tool_name": tool.name})
-                    return f'Tool call to "{tool.name}" cancelled by user approval.'
+                should_proceed = await self.hooks.on_tool_call(request.tool_name, str(request.args))
+                if not should_proceed:
+                    return f"Tool call to {request.tool_name} was rejected by hooks"
+                    
+            # Execute the tool with both query and args
+            result = await tool.run(input_str=request.query, args=request.args)
             
-            # Execute the tool
-            result = await tool.run("", request.args) if request.args else await tool.run(request.query)
-            
-            # Check for empty or error results
-            if not result or (isinstance(result, str) and result.lower().startswith("error")):
-                self.logger.error(f"Tool execution returned error or empty result", {"tool_name": tool.name, "result": result})
-                # Add additional guidance
-                result = (
-                    f"{result}\n\n"
-                    f"The tool call encountered issues. Please try a different approach or provide a "
-                    f"FINAL ANSWER: with your best response based on available information."
-                )
-            else:
-                self.logger.log("Tool execution successful", {"tool_name": tool.name})
-            
+            # Call result hooks if defined
             if self.hooks.on_tool_result:
-                await self.hooks.on_tool_result(tool.name, result)
+                self.hooks.on_tool_result(request.tool_name, str(result))
+                
+            # Reset consecutive tool calls on success
+            self._consecutive_tool_calls = 0
             
-            return result
-        except Exception as err:
-            error_msg = str(err)
-            self.logger.error("Tool request failed", {"error": error_msg})
+            # Return formatted result
+            return f"Tool '{request.tool_name}' returned: {result}"
             
-            # Provide more helpful error responses
-            return (
-                f"Error processing tool request: {error_msg}\n\n"
-                f"Consider using a different approach or provide a FINAL ANSWER: based on what you know. "
-                f"If you believe this was a system error unrelated to your request, you can try once more "
-                f"with different parameters."
-            )
+        except Exception as e:
+            # Track failed calls
+            self._failed_tool_calls[tool_key] = self._failed_tool_calls.get(tool_key, 0) + 1
+            
+            error_msg = f"Error calling {request.tool_name}: {str(e)}"
+            self.logger.error("Tool execution returned error or empty result", {
+                "tool_name": request.tool_name,
+                "result": error_msg
+            })
+            
+            if self.hooks.on_tool_validation_error:
+                self.hooks.on_tool_validation_error(request.tool_name, str(e))
+                
+            return error_msg
     
     def should_stop(self, elapsed: int) -> bool:
         """

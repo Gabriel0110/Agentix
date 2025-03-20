@@ -103,14 +103,24 @@ class AdvancedAgentTeam(AgentTeam):
     def enable_shared_memory(self) -> None:
         """
         If a sharedMemory is provided, each Agent's memory references
-        the same memory object.
+        the same memory object. This preserves agent tools and other configurations.
         """
         if not self.shared_memory:
             self.logger.warn("No shared memory set. Nothing to enable.")
             return
         
         for agent in self.agents:
+            # Store the agent's tools before replacing the memory
+            agent_tools = agent.tools
+            
+            # Set the shared memory
             agent.memory = self.shared_memory
+            
+            # Ensure the agent's tools are preserved 
+            if agent_tools:
+                # Make sure the tools are properly registered with the agent
+                agent.tools = agent_tools
+                self.logger.log(f"Preserved {len(agent_tools)} tools for agent {agent.name}")
         
         self.logger.log("Shared memory enabled for all agents")
     
@@ -477,4 +487,108 @@ Final responses should be marked with "FINAL ANSWER:".
         ])
         
         header = f"Team Response (Contributors: {contributing_agents})\n{'=' * 40}\n"
-        return f"{header}{final_answer}" 
+        return f"{header}{final_answer}"
+    
+    async def run_sequential(self, query: str, hooks: Optional[TeamHooks] = None) -> str:
+        """
+        Runs agents sequentially with specialized query transformations.
+        This override properly transforms queries based on agent roles and ensures
+        proper workflow between agents.
+        
+        Args:
+            query: The user input or initial query
+            hooks: Optional TeamHooks for debugging/logging steps and errors
+            
+        Returns:
+            The final output string after all agents have processed it
+        """
+        self.logger.log(f"[AdvancedAgentTeam:{self.name}] Starting sequential execution", {
+            "query": query,
+            "agents": [agent.name for agent in self.agents]
+        })
+        
+        # Initialize shared memory if available
+        await self.initialize_shared_context(query)
+        
+        current_input = query
+        all_contributions = []
+        
+        for idx, agent in enumerate(self.agents):
+            agent_role = self.get_agent_role(agent)
+            role_name = agent_role.name if agent_role else "Unspecified"
+            
+            self.logger.log(f"[AdvancedAgentTeam:{self.name}] Running agent {idx+1}/{len(self.agents)}: {agent.name} ({role_name})")
+            
+            # Get specialized query for this agent based on its role
+            specialized_query = self.get_specialized_query(agent, current_input)
+            
+            # Call hooks if available
+            if hooks and hooks.on_agent_start:
+                hooks.on_agent_start(agent.name, specialized_query)
+            
+            try:
+                # Run the agent with its specialized query
+                self.logger.log(f"[AdvancedAgentTeam:{self.name}] Running {agent.name} with specialized query", {
+                    "original": current_input,
+                    "transformed": specialized_query
+                })
+                
+                output = await agent.run(specialized_query)
+                
+                self.logger.log(f"[AdvancedAgentTeam:{self.name}] {agent.name} completed", {
+                    "output_length": len(output)
+                })
+                
+                # Store contribution for reporting
+                all_contributions.append({
+                    "agent": agent.name,
+                    "role": role_name,
+                    "output": output
+                })
+                
+                # Call hooks if available
+                if hooks and hooks.on_agent_end:
+                    hooks.on_agent_end(agent.name, output)
+                
+                # Pass to the next agent
+                current_input = output
+                
+                # Add to shared memory as a contribution
+                await self.track_contribution(agent, output, False)
+                
+            except Exception as err:
+                error_msg = f"Error from agent {agent.name}: {str(err)}"
+                self.logger.error(f"[AdvancedAgentTeam:{self.name}] Error in sequential execution", {
+                    "agent": agent.name,
+                    "error": str(err)
+                })
+                
+                if hooks and hooks.on_error:
+                    hooks.on_error(agent.name, err)
+                
+                # Add error to contributions
+                all_contributions.append({
+                    "agent": agent.name,
+                    "role": role_name,
+                    "error": str(err)
+                })
+                
+                # Continue with a default message
+                current_input = error_msg
+                
+                # Add error to shared memory
+                if self.shared_memory:
+                    await self.shared_memory.add_message({
+                        "role": "system",
+                        "content": error_msg
+                    })
+        
+        # Handle final result with hooks
+        if hooks and hooks.on_final:
+            hooks.on_final([current_input])
+        
+        self.logger.log(f"[AdvancedAgentTeam:{self.name}] Sequential execution completed", {
+            "contributions": len(all_contributions)
+        })
+        
+        return current_input 

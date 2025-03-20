@@ -7,6 +7,7 @@ from function signatures using type hints and docstrings.
 """
 
 import inspect
+import functools
 from typing import Any, Callable, Dict, List, Optional, get_type_hints
 
 from .tools import Tool
@@ -33,11 +34,21 @@ def function_tool(
         usage_example: Optional example of how to use the tool
         
     Example:
-        @function_tool(description="Get weather for a city")
+        @function_tool(
+            name="GetWeather",
+            description="Get current weather for a city",
+            usage_example='TOOL REQUEST: GetWeather {"city": "San Francisco"}'
+        )
         def get_weather(city: str) -> str:
             '''Get current weather for the specified city.'''
             return f"The weather in {city} is sunny"
     """
+    # Handle case when decorator is used without parentheses
+    if callable(name):
+        func = name
+        name = None
+        return function_tool()(func)
+        
     def decorator(func: Callable) -> Tool:
         # Get function signature info
         sig = inspect.signature(func)
@@ -97,10 +108,11 @@ def function_tool(
                 self._func = func
                 self._is_async = inspect.iscoroutinefunction(func)
                 self._param_docs = parse_docstring(doc)
+                self._name = name or func.__name__
             
             @property
             def name(self) -> str:
-                return name or func.__name__
+                return self._name
             
             @property
             def description(self) -> str:
@@ -140,27 +152,31 @@ def function_tool(
                     parameters=self.parameters
                 )
             
-            async def run(self, input_str: str, args: Optional[Dict[str, Any]] = None) -> str:
+            async def run(self, input_str: str = "", args: Optional[Dict[str, Any]] = None) -> str:
                 """Run the function with provided arguments."""
                 try:
-                    # If no args provided but input_str exists, try to use it as the first argument
+                    # Initialize args if not provided
+                    if args is None:
+                        args = {}
+                    
+                    # If no args provided but input_str exists and we have exactly one required parameter,
+                    # use input_str as the value for that parameter
                     if not args and input_str and len(self.parameters) == 1:
                         args = {self.parameters[0].name: input_str}
                     
                     # Validate required parameters
-                    if args:
-                        missing_params = [
-                            p.name for p in self.parameters 
-                            if p.required and p.name not in args
-                        ]
-                        if missing_params:
-                            return f"Error: Missing required parameters: {', '.join(missing_params)}"
+                    missing_params = [
+                        p.name for p in self.parameters 
+                        if p.required and p.name not in args
+                    ]
+                    if missing_params:
+                        return f"Error: Missing required parameters: {', '.join(missing_params)}"
                     
-                    # Call the function
+                    # Call the function with the provided arguments
                     if self._is_async:
-                        result = await self._func(**args) if args else await self._func()
+                        result = await self._func(**args)
                     else:
-                        result = self._func(**args) if args else self._func()
+                        result = self._func(**args)
                     
                     # Convert result to string if needed
                     if not isinstance(result, str):
@@ -170,9 +186,21 @@ def function_tool(
                     
                 except Exception as e:
                     return f"Error calling {self.name}: {str(e)}"
+            
+            def __str__(self) -> str:
+                return f"Tool({self.name})"
+                
+            def __repr__(self) -> str:
+                return f"Tool({self.name})"
         
-        # Return an instance of the tool
-        return FunctionTool()
+        # Create an instance of the tool
+        tool_instance = FunctionTool()
+        
+        # Add tool attributes to the original function for compatibility
+        functools.update_wrapper(tool_instance, func)
+        
+        # Return the tool instance
+        return tool_instance
     
     return decorator
 

@@ -1,3 +1,9 @@
+"""
+Agentix Agent Module
+
+This module provides the core Agent class and various specialized agents.
+"""
+
 from .agent import Agent, AgentOptions, AgentHooks
 from .prompt_builder import AgentPromptBuilder
 from .multi_agent import (
@@ -15,6 +21,11 @@ from .multi_agent import (
     AgentContribution,
     AdvancedTeamOptions,
     LLMConvergenceChecker
+)
+from .autonomous_agent import (
+    AutonomousAgent, 
+    AutoAgentOptions, 
+    AutoAgentHooks
 )
 
 __all__ = [
@@ -35,5 +46,8 @@ __all__ = [
     "LLMConvergenceChecker",
     "AgentOptions",
     "AgentHooks",
-    "AgentPromptBuilder"
+    "AgentPromptBuilder",
+    "AutonomousAgent",
+    "AutoAgentOptions",
+    "AutoAgentHooks"
 ] 
