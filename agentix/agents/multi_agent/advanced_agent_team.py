@@ -592,3 +592,94 @@ Final responses should be marked with "FINAL ANSWER:".
         })
         
         return current_input 
+    
+    async def run_in_parallel(self, query: str, hooks: Optional[TeamHooks] = None) -> List[str]:
+        """
+        Runs all agents in parallel with specialized query transformations.
+        This override properly transforms queries based on agent roles and ensures
+        proper tracking of contributions.
+        
+        Args:
+            query: The user input or initial query
+            hooks: Optional TeamHooks for debugging/logging steps and errors
+            
+        Returns:
+            An array of output strings from each agent
+        """
+        import asyncio
+        
+        self.logger.log(f"[AdvancedAgentTeam:{self.name}] Starting parallel execution", {
+            "query": query,
+            "agents": [agent.name for agent in self.agents]
+        })
+        
+        # Initialize shared memory if available
+        await self.initialize_shared_context(query)
+        
+        async def run_agent_with_role(agent: Agent) -> str:
+            agent_role = self.get_agent_role(agent)
+            role_name = agent_role.name if agent_role else "Unspecified"
+            
+            self.logger.log(f"[AdvancedAgentTeam:{self.name}] Running agent: {agent.name} ({role_name})")
+            
+            # Get specialized query for this agent based on its role
+            specialized_query = self.get_specialized_query(agent, query)
+            
+            # Call hooks if available
+            if hooks and hooks.on_agent_start:
+                hooks.on_agent_start(agent.name, specialized_query)
+            
+            try:
+                # Run the agent with its specialized query
+                self.logger.log(f"[AdvancedAgentTeam:{self.name}] Running {agent.name} with specialized query", {
+                    "original": query,
+                    "transformed": specialized_query
+                })
+                
+                output = await agent.run(specialized_query)
+                
+                self.logger.log(f"[AdvancedAgentTeam:{self.name}] {agent.name} completed", {
+                    "output_length": len(output)
+                })
+                
+                # Call hooks if available
+                if hooks and hooks.on_agent_end:
+                    hooks.on_agent_end(agent.name, output)
+                
+                # Add to shared memory as a contribution
+                await self.track_contribution(agent, output, False)
+                
+                return output
+                
+            except Exception as err:
+                error_msg = f"Error from agent {agent.name}: {str(err)}"
+                self.logger.error(f"[AdvancedAgentTeam:{self.name}] Error in parallel execution", {
+                    "agent": agent.name,
+                    "error": str(err)
+                })
+                
+                if hooks and hooks.on_error:
+                    hooks.on_error(agent.name, err)
+                
+                # Add error to shared memory
+                if self.shared_memory:
+                    await self.shared_memory.add_message({
+                        "role": "system",
+                        "content": error_msg
+                    })
+                
+                return error_msg
+        
+        # Create a task for each agent
+        tasks = [run_agent_with_role(agent) for agent in self.agents]
+        results = await asyncio.gather(*tasks)
+        
+        # Handle final results with hooks
+        if hooks and hooks.on_final:
+            hooks.on_final(results)
+        
+        self.logger.log(f"[AdvancedAgentTeam:{self.name}] Parallel execution completed", {
+            "results": len(results)
+        })
+        
+        return results
