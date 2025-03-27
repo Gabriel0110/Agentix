@@ -1,13 +1,15 @@
 import time
-from typing import List, Dict, Any, Optional, Callable, Union, TypedDict, Awaitable, cast
-from dataclasses import dataclass
+from typing import List, Dict, Any, Optional, Callable, Union, Awaitable
+from dataclasses import dataclass, field
+from typing import Set
+import asyncio
 
 from ..tools.tool_analyzer import ToolAnalyzer
 from ..llms import LLM
-from ..memory.memory import Memory, MemoryRole, ConversationMessage
+from ..memory.memory import Memory, ConversationMessage
 from ..memory.reflection_memory import ReflectionMemory
 from ..tools.tools import Tool
-from ..planner import Planner
+from ..planner import SimpleLLMPlanner, Planner
 from ..tools.tool_request import ToolRequestParser, ParsedToolRequest
 from ..utils.debug_logger import DebugLogger
 from ..metrics.workflow_metrics import BaseWorkflowMetrics
@@ -18,9 +20,23 @@ class AgentOptions:
     max_steps: int = 15
     usage_limit: int = 15
     use_reflection: bool = True
-    time_to_live: int = 60000  # ms
+    time_to_live: int = 120000  # ms
     debug: bool = False
     validate_output: bool = False
+    
+    # Planning capabilities
+    enable_planning: bool = False
+    
+    # Recovery capabilities
+    auto_recovery: bool = False
+    max_recovery_attempts: int = 3
+    
+    # Approval settings
+    require_approval_for: Set[str] = field(default_factory=lambda: set())
+    approval_callback: Optional[Callable[[str, str], Awaitable[bool]]] = None
+    
+    # Progress tracking
+    progress_callback: Optional[Callable[[str, float], None]] = None
 
 
 @dataclass
@@ -70,7 +86,7 @@ class Agent:
         
         # Options - handle both dict and AgentOptions
         if options is None:
-            options = AgentOptions()
+            self.options = AgentOptions()
         elif isinstance(options, dict):
             # Convert dict to AgentOptions
             agent_options = AgentOptions()
@@ -79,22 +95,25 @@ class Agent:
                     setattr(agent_options, key, value)
                 else:
                     print(f"Warning: Ignoring unknown option '{key}'")
-            options = agent_options
+            self.options = agent_options
+        else:
+            self.options = options
         
-        self.max_steps = options.max_steps
-        self.usage_limit = options.usage_limit
-        self.time_to_live = options.time_to_live
-        self.debug = options.debug
-        self.logger = DebugLogger(self.debug)
-        self.validate_output = options.validate_output
+        # Set instance variables from options for backward compatibility
+        self.max_steps = self.options.max_steps
+        self.usage_limit = self.options.usage_limit
+        self.time_to_live = self.options.time_to_live
+        self.debug = self.options.debug
+        self.logger = DebugLogger(enabled=self.debug)
+        self.validate_output = self.options.validate_output
         
         # Reflection toggling
         if len(self.tools) > 0:
             self.use_reflection = True
-            if not options.use_reflection:
+            if not self.options.use_reflection:
                 self.logger.warn(f"[Agent] Tools were provided, forcing use_reflection to True.")
         else:
-            self.use_reflection = options.use_reflection
+            self.use_reflection = self.options.use_reflection
             
         # Initialize tracking attributes
         self.llm_calls_used = 0
@@ -241,196 +260,223 @@ class Agent:
         })
         await self.memory.add_message({"role": "user", "content": query})
         
-        # Single-pass if reflection is off
-        if not self.use_reflection:
-            return await self.single_pass()
-        
-        # If planner is specified
-        if self.planner:
-            return await self.execute_planner_flow(query)
-        
-        # Default reflection loop
-        while True:
-            # Check usage/time
-            elapsed = int(time.time() * 1000) - self.start_time
-            self.logger.stats({
-                "llm_calls_used": self.llm_calls_used,
-                "llm_calls_limit": self.usage_limit,
-                "steps_used": self.step_count,
-                "max_steps": self.max_steps,
-                "elapsed_ms": elapsed,
-                "time_to_live": self.time_to_live,
-            })
-            
-            if self.should_stop(elapsed):
-                return self.get_stopping_reason(elapsed)
-            
-            self.llm_calls_used += 1
-            self.step_count += 1
-            
-            context = await self.memory.get_context_for_prompt(query)
-            llm_output = await self.model.call(context)
-            self.logger.log(f"[Agent:{self.name}] LLM Output:", {"llm_output": llm_output})
-            
-            # Track recent LLM outputs to detect repetition
-            self._last_n_assistant_messages.append(llm_output)
-            if len(self._last_n_assistant_messages) > 3:
-                self._last_n_assistant_messages.pop(0)  # Keep only the most recent 3
+        try:
+            # If planning is enabled, use planner-based execution
+            if self.options.enable_planning:
+                self.logger.log(f"[Agent:{self.name}] Using planner-based execution")
                 
-            # Check for repetitive outputs
-            is_repetitive = False
-            if len(self._last_n_assistant_messages) >= 2:
-                # Check if last two messages are identical or very similar
-                if self._last_n_assistant_messages[-1] == self._last_n_assistant_messages[-2]:
-                    is_repetitive = True
-            
-            # Tool usage?
-            tool_request = ToolRequestParser.parse(llm_output)
-            if tool_request:
-                self.logger.log(f"[Agent:{self.name}] Tool request parsed:", {"tool": tool_request.tool_name, "query": tool_request.query, "args": tool_request.args})
+                # Create planner if not provided, using the agent's model
+                if not self.planner:
+                    self.planner = SimpleLLMPlanner(self.model, debug=self.debug)
+                    self.logger.log(f"[Agent:{self.name}] Created default planner")
                 
-                # Keep track of last few tool calls to detect patterns
-                tool_key = f"{tool_request.tool_name}:{tool_request.query}"
-                self._last_n_tool_calls.append(tool_key)
-                if len(self._last_n_tool_calls) > 3:
-                    self._last_n_tool_calls.pop(0)  # Keep only the most recent 3
+                return await self._execute_with_recovery(
+                    lambda: self.execute_planner_flow(query),
+                    is_planning=True
+                )
+            
+            # Single-pass if reflection is off
+            if not self.use_reflection:
+                return await self._execute_with_recovery(
+                    lambda: self.single_pass(),
+                    is_planning=False
+                )
+            
+            # Default reflection loop with recovery
+            while True:
+                # Check usage/time
+                elapsed = int(time.time() * 1000) - self.start_time
+                self.logger.stats({
+                    "llm_calls_used": self.llm_calls_used,
+                    "llm_calls_limit": self.usage_limit,
+                    "steps_used": self.step_count,
+                    "max_steps": self.max_steps,
+                    "elapsed_ms": elapsed,
+                    "time_to_live": self.time_to_live,
+                })
+                
+                if self.should_stop(elapsed):
+                    return self.get_stopping_reason(elapsed)
+                
+                self.llm_calls_used += 1
+                self.step_count += 1
+                
+                context = await self.memory.get_context_for_prompt(query)
+                llm_output = await self.model.call(context)
+                self.logger.log(f"[Agent:{self.name}] LLM Output:", {"llm_output": llm_output})
+                
+                # Track recent LLM outputs to detect repetition
+                self._last_n_assistant_messages.append(llm_output)
+                if len(self._last_n_assistant_messages) > 3:
+                    self._last_n_assistant_messages.pop(0)  # Keep only the most recent 3
                     
-                # Check if we're in a problematic pattern
-                is_stuck_pattern = self._check_for_stuck_patterns()
+                # Check for repetitive outputs
+                is_repetitive = False
+                if len(self._last_n_assistant_messages) >= 2:
+                    # Check if last two messages are identical or very similar
+                    if self._last_n_assistant_messages[-1] == self._last_n_assistant_messages[-2]:
+                        is_repetitive = True
                 
-                # Increment counter
-                self._consecutive_tool_calls += 1
-                
-                # Check for tool call issues
-                if is_stuck_pattern or self._consecutive_tool_calls > 3:
-                    # We're either in a loop or making too many consecutive calls
-                    guidance_message = (
-                        "I notice you're making multiple tool calls without providing a final answer. "
-                        "Based on the information you've gathered so far, please provide a FINAL ANSWER: to "
-                        "the user's query. If you're encountering errors with a particular tool, try a different "
-                        "approach or summarize what you do know."
+                # Tool usage?
+                tool_request = ToolRequestParser.parse(llm_output)
+                if tool_request:
+                    self.logger.log(f"[Agent:{self.name}] Tool request parsed:", {"tool": tool_request.tool_name, "query": tool_request.query, "args": tool_request.args})
+                    
+                    # Keep track of last few tool calls to detect patterns
+                    tool_key = f"{tool_request.tool_name}:{tool_request.query}"
+                    self._last_n_tool_calls.append(tool_key)
+                    if len(self._last_n_tool_calls) > 3:
+                        self._last_n_tool_calls.pop(0)  # Keep only the most recent 3
+                        
+                    # Check if we're in a problematic pattern
+                    is_stuck_pattern = self._check_for_stuck_patterns()
+                    
+                    # Increment counter
+                    self._consecutive_tool_calls += 1
+                    
+                    # Check for tool call issues
+                    if is_stuck_pattern or self._consecutive_tool_calls > 3:
+                        # We're either in a loop or making too many consecutive calls
+                        guidance_message = (
+                            "I notice you're making multiple tool calls without providing a final answer. "
+                            "Based on the information you've gathered so far, please provide a FINAL ANSWER: to "
+                            "the user's query. If you're encountering errors with a particular tool, try a different "
+                            "approach or summarize what you do know."
+                        )
+                        
+                        # If we've made many tool calls, make the message stronger
+                        if self._consecutive_tool_calls > 5:
+                            guidance_message = (
+                                "You have made several consecutive tool calls without reaching a conclusion. "
+                                "Please STOP making additional tool calls and provide a FINAL ANSWER: based on "
+                                "the information you have. Even a partial answer is better than continuing to "
+                                "call tools in a loop."
+                            )
+                        
+                        await self.memory.add_message({
+                            "role": "system", 
+                            "content": guidance_message
+                        })
+                        
+                        # For extreme cases, force a final answer
+                        if self._consecutive_tool_calls > 7:
+                            self.logger.log(f"[Agent:{self.name}] Forcing final answer after too many consecutive tool calls")
+                            return "I apologize, but I've been unable to provide a complete answer due to tool usage issues. Please try rephrasing your query or asking about a different topic."
+                    
+                    # Store the tool request in memory to help the model see its own requests
+                    await self.memory.add_message({
+                        "role": "assistant", 
+                        "content": llm_output,
+                        "metadata": {"type": "tool_request"}
+                    })
+                    
+                    result = await self._execute_with_recovery(
+                        lambda: self.handle_tool_request(tool_request),
+                        is_planning=False
                     )
                     
-                    # If we've made many tool calls, make the message stronger
-                    if self._consecutive_tool_calls > 5:
-                        guidance_message = (
-                            "You have made several consecutive tool calls without reaching a conclusion. "
-                            "Please STOP making additional tool calls and provide a FINAL ANSWER: based on "
-                            "the information you have. Even a partial answer is better than continuing to "
-                            "call tools in a loop."
-                        )
+                    # Store tool results with a more distinctive format
+                    await self.memory.add_message({
+                        "role": "assistant",
+                        "content": f"Tool '{tool_request.tool_name}' returned: {result}",
+                        "metadata": {
+                            "type": "tool_result",
+                            "tool_name": tool_request.tool_name
+                        }
+                    })
                     
+                    continue  # Next iteration
+                else:
+                    self.logger.log(f"[Agent:{self.name}] No tool request found in output")
+                
+                # Reset consecutive tool calls counter if we're not making a tool call
+                self._consecutive_tool_calls = 0
+                
+                # Check for repetitive outputs and add guidance if needed
+                if is_repetitive:
+                    self.logger.log(f"[Agent:{self.name}] Detected repetitive outputs")
+                    guidance_message = (
+                        "I notice you're repeating similar responses. If you've gathered enough information, "
+                        "please provide a FINAL ANSWER: to the user's query. Remember to prefix your final response "
+                        "with 'FINAL ANSWER:' to clearly indicate you've completed the task."
+                    )
                     await self.memory.add_message({
                         "role": "system", 
                         "content": guidance_message
                     })
                     
-                    # For extreme cases, force a final answer
-                    if self._consecutive_tool_calls > 7:
-                        self.logger.log(f"[Agent:{self.name}] Forcing final answer after too many consecutive tool calls")
-                        return "I apologize, but I've been unable to provide a complete answer due to tool usage issues. Please try rephrasing your query or asking about a different topic."
+                    # Force a final answer if repeatedly stuck
+                    if len(self._last_n_assistant_messages) >= 3 and all(m == self._last_n_assistant_messages[0] for m in self._last_n_assistant_messages):
+                        self.logger.log(f"[Agent:{self.name}] Forcing final answer after too many repetitive outputs")
+                        # Extract previous non-repetitive content as the final answer
+                        final_content = ""
+                        for msg in reversed(await self.memory.get_context()):
+                            if msg["role"] == "assistant" and msg["content"] != self._last_n_assistant_messages[-1]:
+                                final_content = msg["content"]
+                                break
+                        
+                        if not final_content:
+                            final_content = self._last_n_assistant_messages[-1]
+                        
+                        return f"FINAL ANSWER: {final_content}"
                 
-                # Store the tool request in memory to help the model see its own requests
-                await self.memory.add_message({
-                    "role": "assistant", 
-                    "content": llm_output,
-                    "metadata": {"type": "tool_request"}
-                })
-                
-                result = await self.handle_tool_request(tool_request)
-                
-                # Check for error results and track failed tools
-                if isinstance(result, str) and (result.lower().startswith("error") or "error" in result.lower()):
-                    self._failed_tool_calls[tool_request.tool_name] = self._failed_tool_calls.get(tool_request.tool_name, 0) + 1
-                    
-                    # If a tool has failed multiple times, add stronger guidance
-                    if self._failed_tool_calls.get(tool_request.tool_name, 0) >= 2:
-                        await self.memory.add_message({
-                            "role": "system", 
-                            "content": f"The tool '{tool_request.tool_name}' has failed multiple times. Please use a different approach or provide a FINAL ANSWER: with what you know."
-                        })
-                
-                # Store tool results with a more distinctive format
-                await self.memory.add_message({
-                    "role": "assistant",
-                    "content": f"Tool '{tool_request.tool_name}' returned: {result}",
-                    "metadata": {
-                        "type": "tool_result",
-                        "tool_name": tool_request.tool_name
-                    }
-                })
-                
-                continue  # Next iteration
-            else:
-                self.logger.log(f"[Agent:{self.name}] No tool request found in output")
-            
-            # Reset consecutive tool calls counter if we're not making a tool call
-            self._consecutive_tool_calls = 0
-            
-            # Check for repetitive outputs and add guidance if needed
-            if is_repetitive:
-                self.logger.log(f"[Agent:{self.name}] Detected repetitive outputs")
-                guidance_message = (
-                    "I notice you're repeating similar responses. If you've gathered enough information, "
-                    "please provide a FINAL ANSWER: to the user's query. Remember to prefix your final response "
-                    "with 'FINAL ANSWER:' to clearly indicate you've completed the task."
-                )
-                await self.memory.add_message({
-                    "role": "system", 
-                    "content": guidance_message
-                })
-                
-                # Force a final answer if repeatedly stuck
-                if len(self._last_n_assistant_messages) >= 3 and all(m == self._last_n_assistant_messages[0] for m in self._last_n_assistant_messages):
-                    self.logger.log(f"[Agent:{self.name}] Forcing final answer after too many repetitive outputs")
-                    # Extract previous non-repetitive content as the final answer
-                    final_content = ""
-                    for msg in reversed(await self.memory.get_context()):
-                        if msg["role"] == "assistant" and msg["content"] != self._last_n_assistant_messages[-1]:
-                            final_content = msg["content"]
-                            break
-                    
-                    if not final_content:
-                        final_content = self._last_n_assistant_messages[-1]
-                    
-                    return f"FINAL ANSWER: {final_content}"
-            
-            # Final answer check
-            if "FINAL ANSWER:" in llm_output:
-                # Check if FINAL ANSWER is at the start or end
-                parts = llm_output.split("FINAL ANSWER:")
-                if len(parts) != 2:
-                    # Multiple FINAL ANSWER markers - take the last one
-                    final_ans = parts[-1].strip()
-                else:
-                    # If FINAL ANSWER is at the start, take what's after
-                    # If it's at the end, take what's before
-                    if parts[0].strip() == "":
-                        final_ans = parts[1].strip()
+                # Final answer check
+                if "FINAL ANSWER:" in llm_output:
+                    # Check if FINAL ANSWER is at the start or end
+                    parts = llm_output.split("FINAL ANSWER:")
+                    if len(parts) != 2:
+                        # Multiple FINAL ANSWER markers - take the last one
+                        final_ans = parts[-1].strip()
                     else:
-                        final_ans = parts[0].strip()
+                        # If FINAL ANSWER is at the start, take what's after
+                        # If it's at the end, take what's before
+                        if parts[0].strip() == "":
+                            final_ans = parts[1].strip()
+                        else:
+                            final_ans = parts[0].strip()
+                    
+                    self.logger.log(f"[Agent:{self.name}] Final answer found", {"final_ans": final_ans})
+                    
+                    # Add final answer to memory
+                    await self.memory.add_message({"role": "assistant", "content": llm_output})
+                    
+                    # If validate_output is true, attempt validation
+                    if self.validate_output:
+                        validated = await self.validate_final_answer(final_ans)
+                        if not validated:
+                            self.logger.log(f"[Agent:{self.name}] Validation failed. Continuing loop to refine...")
+                            # We can either continue the loop or forcibly revise the answer
+                            # We'll continue the loop here:
+                            continue
+                    
+                    # Log final stats before returning
+                    elapsed = int(time.time() * 1000) - self.start_time
+                    self.logger.stats({
+                        "llm_calls_used": self.llm_calls_used,
+                        "llm_calls_limit": self.usage_limit,
+                        "steps_used": self.step_count,
+                        "max_steps": self.max_steps,
+                        "elapsed_ms": elapsed,
+                        "time_to_live": self.time_to_live,
+                        "final_status": "completed"
+                    })
+                    
+                    if self.hooks.on_final_answer:
+                        await self.hooks.on_final_answer(final_ans)
+                    return final_ans
                 
-                self.logger.log(f"[Agent:{self.name}] Final answer found", {"final_ans": final_ans})
-                
-                # Add final answer to memory
+                # Otherwise, treat as intermediate output
                 await self.memory.add_message({"role": "assistant", "content": llm_output})
                 
-                # If validate_output is true, attempt validation
-                if self.validate_output and self.validation_model:
-                    validated = await self.validate_final_answer(final_ans)
-                    if not validated:
-                        self.logger.log(f"[Agent:{self.name}] Validation failed. Continuing loop to refine...")
-                        # We can either continue the loop or forcibly revise the answer
-                        # We'll continue the loop here:
-                        continue
-                
-                if self.hooks.on_final_answer:
-                    await self.hooks.on_final_answer(final_ans)
-                return final_ans
-            
-            # Otherwise, treat as intermediate output
-            await self.memory.add_message({"role": "assistant", "content": llm_output})
-        
+        except Exception as e:
+            # Use recovery if enabled
+            if self.options.auto_recovery:
+                return await self._execute_with_recovery(
+                    lambda: self.run(query),
+                    is_planning=False
+                )
+            raise e
+    
     def _check_for_stuck_patterns(self) -> bool:
         """
         Check if the agent is stuck in a pattern of repetitive tool calls.
@@ -470,12 +516,24 @@ class Agent:
         single_response = await self.model.call(await self.memory.get_context())
         await self.memory.add_message({"role": "assistant", "content": single_response})
         
-        # If final answer, optionally validate
-        if self.validate_output and self.validation_model:
+        # If validate_output is true, attempt validation
+        if self.validate_output:
             validated = await self.validate_final_answer(single_response)
             if not validated:
                 # If single-pass and fails validation, we just return it anyway, or we can override
                 self.logger.log(f"[Agent:{self.name}] Single pass validation failed. Returning anyway.")
+        
+        # Log final stats before returning
+        elapsed = int(time.time() * 1000) - self.start_time
+        self.logger.stats({
+            "llm_calls_used": self.llm_calls_used,
+            "llm_calls_limit": self.usage_limit,
+            "steps_used": self.step_count,
+            "max_steps": self.max_steps,
+            "elapsed_ms": elapsed,
+            "time_to_live": self.time_to_live,
+            "final_status": "completed"
+        })
         
         if self.hooks.on_final_answer:
             await self.hooks.on_final_answer(single_response)
@@ -488,78 +546,182 @@ class Agent:
         if not self.planner:
             return "No planner specified."
             
-        plan = await self.planner.generate_plan(query, self.tools, self.memory)
-        if self.hooks.on_plan_generated:
-            self.hooks.on_plan_generated(plan)
-            
-        # Format the plan nicely for logging
         try:
-            import json
-            parsed_plan = json.loads(plan)
-            formatted_plan = json.dumps(parsed_plan, indent=2)
-            
-            # Create a summary of the plan
-            plan_summary = "\n".join([
-                f"Step {i+1}: {step['action'].upper()} - {step['details'][:60]}..."
-                for i, step in enumerate(parsed_plan)
-            ])
-            
-            self.logger.log(f"[Agent:{self.name}] Generated Plan:", {
-                "total_steps": len(parsed_plan),
-                "summary": plan_summary,
-                "full_plan": formatted_plan
+            # Log stats before plan generation
+            elapsed = int(time.time() * 1000) - self.start_time
+            self.logger.stats({
+                "llm_calls_used": self.llm_calls_used,
+                "llm_calls_limit": self.usage_limit,
+                "steps_used": self.step_count,
+                "max_steps": self.max_steps,
+                "elapsed_ms": elapsed,
+                "time_to_live": self.time_to_live,
             })
             
-        except json.JSONDecodeError:
-            self.logger.error(f"[Agent:{self.name}] Failed to parse plan for formatting", {
-                "raw_plan": plan
-            })
-        
-        steps = self.parse_plan(plan)
-        for i, step in enumerate(steps, 1):
-            # Format the current step nicely
+            # Increment counters for plan generation
+            self.llm_calls_used += 1
+            self.step_count += 1
+            
+            # Generate plan with timeout to prevent hanging
+            plan = await asyncio.wait_for(
+                self.planner.generate_plan(query, self.tools, self.memory),
+                timeout=30.0  # 30 second timeout for plan generation
+            )
+            
+            if self.hooks.on_plan_generated:
+                self.hooks.on_plan_generated(plan)
+                
+            # Format the plan nicely for logging
             try:
-                step_formatted = json.dumps(step, indent=2)
-            except:
-                step_formatted = str(step)
+                import json
+                parsed_plan = json.loads(plan)
+                formatted_plan = json.dumps(parsed_plan, indent=2)
                 
-            self.logger.log(f"[Agent:{self.name}] Executing step {i}/{len(steps)}", {
-                "step_details": step_formatted,
-                "action": step.get("action"),
-                "details": step.get("details")
-            })
-            
-            step_response = await self.execute_plan_step(step, query)
-            await self.memory.add_message({"role": "assistant", "content": step_response})
-            
-            self.logger.log(f"[Agent:{self.name}] Step {i} completed", {
-                "response": step_response
-            })
-            
-            if "FINAL ANSWER" in step_response:
-                # Extract the final answer string
-                final_answer = step_response.replace("FINAL ANSWER:", "").strip()
+                # Create a summary of the plan
+                plan_summary = "\n".join([
+                    f"Step {i+1}: {step['action'].upper()} - {step['details'][:60]}..."
+                    for i, step in enumerate(parsed_plan)
+                ])
                 
-                self.logger.log(f"[Agent:{self.name}] Plan execution completed with final answer", {
-                    "total_steps_executed": i,
-                    "final_answer": final_answer
+                self.logger.log(f"[Agent:{self.name}] Generated Plan:", {
+                    "total_steps": len(parsed_plan),
+                    "summary": plan_summary,
+                    "full_plan": formatted_plan
                 })
                 
-                # Validate if required
-                if self.validate_output and self.validation_model:
-                    pass_validation = await self.validate_final_answer(final_answer)
-                    if not pass_validation:
-                        self.logger.log(
-                            f"[Agent:{self.name}] Validation failed in planner flow. Possibly continue or refine?"
-                        )
-                        # Could do more refinement or just return
+                # Check if planning requires approval
+                if "planning" in {a.lower() for a in self.options.require_approval_for}:
+                    self.logger.log(f"[Agent:{self.name}] Requesting plan approval")
+                    approved = await self._request_approval(
+                        "Planning",
+                        f"Generated plan for task: {query}\n\nSummary:\n{plan_summary}\n\nFull Plan:\n{formatted_plan}"
+                    )
+                    if not approved:
+                        self.logger.warn(f"[Agent:{self.name}] Plan was not approved")
+                        return "Plan was not approved by user. Please try a different approach."
                 
-                return final_answer
-        
-        self.logger.log(f"[Agent:{self.name}] Plan execution completed without final answer", {
-            "total_steps": len(steps)
-        })
-        return "Plan executed but no final answer was found."
+            except json.JSONDecodeError:
+                self.logger.log(f"[Agent:{self.name}] Failed to parse plan for formatting", {
+                    "error": "Plan is None or invalid JSON",
+                    "raw_plan": plan,
+                    "level": "error"
+                })
+                return "Failed to generate a valid plan. Falling back to direct execution."
+            
+            steps = self.parse_plan(plan)
+            if not steps:
+                return "Generated plan had no executable steps. Please try again with a different approach."
+                
+            total_steps = len(steps)
+            
+            # Update progress to 0%
+            if self.options.progress_callback:
+                self.options.progress_callback(self.name, 0.0)
+            
+            for i, step in enumerate(steps, 1):
+                # Format the current step nicely
+                try:
+                    step_formatted = json.dumps(step, indent=2)
+                except:
+                    step_formatted = str(step)
+                    
+                self.logger.log(f"[Agent:{self.name}] Executing step {i}/{len(steps)}", {
+                    "step_details": step_formatted,
+                    "action": step.get("action"),
+                    "details": step.get("details")
+                })
+                
+                # Execute step with recovery
+                try:
+                    # Log stats before step execution
+                    elapsed = int(time.time() * 1000) - self.start_time
+                    self.logger.stats({
+                        "llm_calls_used": self.llm_calls_used,
+                        "llm_calls_limit": self.usage_limit,
+                        "steps_used": self.step_count,
+                        "max_steps": self.max_steps,
+                        "elapsed_ms": elapsed,
+                        "time_to_live": self.time_to_live,
+                    })
+                    
+                    # Increment counters for step execution
+                    self.llm_calls_used += 1
+                    self.step_count += 1
+                    
+                    step_response = await self._execute_with_recovery(
+                        lambda: self.execute_plan_step(step, query),
+                        is_planning=True
+                    )
+                    await self.memory.add_message({"role": "assistant", "content": step_response})
+                    
+                    self.logger.log(f"[Agent:{self.name}] Step {i} completed", {
+                        "response": step_response
+                    })
+                except Exception as e:
+                    self.logger.log(f"[Agent:{self.name}] Step {i} failed", {
+                        "error": str(e),
+                        "level": "error"
+                    })
+                    # If a step fails, try to continue with remaining steps
+                    continue
+                
+                # Update progress
+                if self.options.progress_callback:
+                    progress = i / total_steps
+                    self.options.progress_callback(self.name, progress)
+                
+                if "FINAL ANSWER" in step_response:
+                    # Extract the final answer string
+                    final_answer = step_response.replace("FINAL ANSWER:", "").strip()
+                    
+                    self.logger.log(f"[Agent:{self.name}] Plan execution completed with final answer", {
+                        "total_steps_executed": i,
+                        "final_answer": final_answer
+                    })
+                    
+                    # Validate if required
+                    if self.validate_output:
+                        pass_validation = await self.validate_final_answer(final_answer)
+                        if not pass_validation:
+                            self.logger.log(
+                                f"[Agent:{self.name}] Validation failed in planner flow. Continuing with best effort answer."
+                            )
+                    
+                    # Update progress to 100%
+                    if self.options.progress_callback:
+                        self.options.progress_callback(self.name, 1.0)
+                    
+                    # Log final stats before returning
+                    elapsed = int(time.time() * 1000) - self.start_time
+                    self.logger.stats({
+                        "llm_calls_used": self.llm_calls_used,
+                        "llm_calls_limit": self.usage_limit,
+                        "steps_used": self.step_count,
+                        "max_steps": self.max_steps,
+                        "elapsed_ms": elapsed,
+                        "time_to_live": self.time_to_live,
+                        "final_status": "completed"
+                    })
+                    
+                    return final_answer
+            
+            self.logger.log(f"[Agent:{self.name}] Plan execution completed without final answer", {
+                "total_steps": len(steps)
+            })
+            return "Plan executed but no final answer was found. Please try again with a more specific query."
+            
+        except asyncio.TimeoutError:
+            self.logger.log(f"[Agent:{self.name}] Plan generation timed out", {
+                "level": "error"
+            })
+            return "Plan generation timed out. Falling back to direct execution."
+            
+        except Exception as e:
+            self.logger.log(f"[Agent:{self.name}] Error in planner flow", {
+                "error": str(e),
+                "level": "error"
+            })
+            return f"Error during planning: {str(e)}. Please try again with a different approach."
     
     def build_system_prompt(self) -> str:
         """
@@ -668,10 +830,7 @@ class Agent:
                 self.metrics.increment("total_agent_calls")
                 
                 # Validate tool exists before execution
-                tool = next(
-                    (t for t in self.tools if t.name.lower() == details.lower()),
-                    None
-                )
+                tool = self._find_tool(details)
                 
                 if not tool:
                     error_msg = f"Tool '{details}' not found in available tools"
@@ -745,7 +904,7 @@ class Agent:
 Task: {query}
 
 Previous context:
-{context[-3:] if context else 'No previous context'}
+{context[-10:] if context else 'No previous context'}
 
 Current step message:
 {details}
@@ -759,6 +918,9 @@ Provide a clear analysis of the current state and what should be done next.
                 
                 # Get response from model
                 response = await self.model.call(message_prompt)
+                
+                # Log LLM output
+                self.logger.log(f"[Agent:{self.name}] LLM Output:", {"llm_output": response})
                 
                 # Store the analysis
                 await self.memory.add_message({
@@ -789,7 +951,7 @@ Provide a clear analysis of the current state and what should be done next.
 Original query: {query}
 
 Context from previous steps:
-{context[-5:] if context else 'No previous context'}
+{context[-10:] if context else 'No previous context'}
 
 Proposed final answer:
 {details}
@@ -802,7 +964,9 @@ Provide a comprehensive final answer that includes all relevant information and 
                 self.metrics.increment("total_llm_calls")
                 final_response = await self.model.call(completion_prompt)
                 
-                return f"FINAL ANSWER: {final_response}"
+                # Remove any existing FINAL ANSWER prefix before adding our own
+                cleaned_response = final_response.replace("FINAL ANSWER:", "").strip()
+                return f"FINAL ANSWER: {cleaned_response}"
                 
             except Exception as e:
                 error_msg = f"Error finalizing answer: {str(e)}"
@@ -841,16 +1005,17 @@ Provide a comprehensive final answer that includes all relevant information and 
             )
         
         try:
-            # First check if tool exists
-            tool = next(
-                (t for t in self.tools if t.name.lower() == request.tool_name.lower()),
-                None
-            )
+            # First check if tool requires approval
+            tool_approval_key = f"tool.{request.tool_name}".lower()
+            if tool_approval_key in {a.lower() for a in self.options.require_approval_for}:
+                approval_details = f"Tool: {request.tool_name}\nArgs: {request.args}\nQuery: {request.query}"
+                if not await self._request_approval("Tool", approval_details):
+                    return f"Tool '{request.tool_name}' execution was not approved"
             
+            # Find and execute the tool
+            tool = self._find_tool(request.tool_name)
             if not tool:
-                error_msg = f"Tool '{request.tool_name}' not found"
-                self.logger.error(error_msg)
-                return f"Error: {error_msg}"
+                return f"Tool '{request.tool_name}' not found"
                 
             # Track consecutive tool calls
             self._consecutive_tool_calls += 1
@@ -891,7 +1056,8 @@ Provide a comprehensive final answer that includes all relevant information and 
             error_msg = f"Error calling {request.tool_name}: {str(e)}"
             self.logger.error("Tool execution returned error or empty result", {
                 "tool_name": request.tool_name,
-                "result": error_msg
+                "result": error_msg,
+                "level": "error"
             })
             
             if self.hooks.on_tool_validation_error:
@@ -939,11 +1105,14 @@ Provide a comprehensive final answer that includes all relevant information and 
     
     async def validate_final_answer(self, final_answer: str) -> bool:
         """
-        Validate final answer if validate_output is True and we have a validation_model.
+        Validate final answer if validate_output is True.
+        Uses the agent's own model if no separate validation_model is provided.
         If passes validation, returns True. If fails, returns False.
         """
-        if not self.validation_model:
-            # No separate model, skip
+        # Use the agent's model if no separate validation model is provided
+        validation_model = self.validation_model or self.model
+        if not validation_model:
+            # No model available at all, skip validation
             return True
         
         system_prompt = f"""
@@ -959,7 +1128,7 @@ Agent's final answer to validate:
 {final_answer}
         """
         
-        validator_output = await self.validation_model.call([
+        validator_output = await validation_model.call([
             {"role": "system", "content": system_prompt},
         ])
         
@@ -978,4 +1147,174 @@ Agent's final answer to validate:
         except Exception:
             self.logger.warn(f"[Agent:{self.name}] Could not parse validator output. Assuming fail.",
                             {"validator_output": validator_output})
-            return False 
+            return False
+    
+    async def _request_approval(self, action_type: str, details: str) -> bool:
+        """Request approval for an action.
+        
+        Args:
+            action_type: Type of action requiring approval (e.g. "Planning", "Recovery", "Tool")
+            details: Details about the action
+            
+        Returns:
+            bool: True if approved, False otherwise
+        """
+        # Convert action type to lowercase for case-insensitive comparison
+        action_type_lower = action_type.lower()
+        
+        # Check if this action type requires approval
+        if action_type_lower not in {a.lower() for a in self.options.require_approval_for}:
+            return True
+            
+        self.logger.log(f"[Agent:{self.name}] Requesting approval for {action_type}", {
+            "action_type": action_type,
+            "details": details
+        })
+        
+        if self.options.approval_callback:
+            # Directly await the callback since we're in an async context
+            return await self.options.approval_callback(action_type, details)
+            
+        return True
+    
+    async def _execute_with_recovery(self, fn: Callable[[], Awaitable[Any]], is_planning: bool = False) -> Any:
+        """
+        Execute a function with automatic recovery attempts on failure.
+        
+        Args:
+            fn: The async function to execute with recovery
+            is_planning: Whether this is a planning operation (to prevent recursive recovery)
+            
+        Returns:
+            The result of the function execution
+            
+        Raises:
+            Exception: If all recovery attempts fail
+        """
+        recovery_attempts = 0
+        max_attempts = self.options.max_recovery_attempts
+        
+        while True:
+            try:
+                # Execute the function
+                return await fn()
+                
+            except Exception as e:
+                # Don't attempt recovery if auto-recovery is disabled or if we're in planning
+                if not self.options.auto_recovery or is_planning:
+                    self.logger.log(f"[Agent:{self.name}] Auto-recovery disabled or in planning, failing", {
+                        "error": str(e),
+                        "is_planning": is_planning,
+                        "level": "error"
+                    })
+                    raise e
+                    
+                # Track the error
+                self.logger.log(f"[Agent:{self.name}] Error during execution", {
+                    "error": str(e),
+                    "recovery_attempt": recovery_attempts + 1,
+                    "max_attempts": max_attempts,
+                    "level": "error"
+                })
+                
+                recovery_attempts += 1
+                
+                # Check if we've exceeded max attempts
+                if recovery_attempts > max_attempts:
+                    self.logger.log(f"[Agent:{self.name}] Max recovery attempts exceeded", {
+                        "error": str(e),
+                        "max_attempts": max_attempts,
+                        "level": "error"
+                    })
+                    raise Exception(f"Failed after {max_attempts} recovery attempts: {str(e)}")
+                    
+                # Check if recovery requires approval
+                if "recovery" in {a.lower() for a in self.options.require_approval_for}:
+                    self.logger.log(f"[Agent:{self.name}] Requesting recovery approval", {
+                        "attempt": recovery_attempts
+                    })
+                    approved = await self._request_approval(
+                        "Recovery",
+                        f"Recovery attempt {recovery_attempts}/{max_attempts} for error: {str(e)}"
+                    )
+                    if not approved:
+                        self.logger.warn(f"[Agent:{self.name}] Recovery not approved")
+                        raise Exception("Recovery was not approved by user")
+                        
+                # Execute recovery thinking
+                self.logger.log(f"[Agent:{self.name}] Executing recovery thinking", {
+                    "attempt": recovery_attempts
+                })
+                
+                recovery_prompt = self._build_recovery_prompt(str(e), recovery_attempts)
+                try:
+                    recovery_thinking = await asyncio.wait_for(
+                        self.model.call([
+                            {"role": "system", "content": self.build_system_prompt()},
+                            {"role": "user", "content": recovery_prompt}
+                        ]),
+                        timeout=30.0  # 30 second timeout for recovery thinking
+                    )
+                    
+                    # Add recovery thinking to memory
+                    await self.memory.add_message({
+                        "role": "assistant", 
+                        "content": f"[RECOVERY THINKING] {recovery_thinking}"
+                    })
+                    
+                    self.logger.log(f"[Agent:{self.name}] Recovery thinking complete, retrying", {
+                        "attempt": recovery_attempts
+                    })
+                    
+                except asyncio.TimeoutError:
+                    self.logger.log(f"[Agent:{self.name}] Recovery thinking timed out", {
+                        "level": "error"
+                    })
+                    raise Exception("Recovery thinking timed out")
+                
+                # Wait briefly before retrying
+                await asyncio.sleep(1)
+                
+    def _build_recovery_prompt(self, error: str, attempt: int) -> str:
+        """
+        Build a prompt for error recovery.
+        
+        Args:
+            error: The error message
+            attempt: The current recovery attempt number
+            
+        Returns:
+            A prompt for recovery
+        """
+        return f"""
+I encountered an error during execution: {error}
+
+This is recovery attempt {attempt}. Please help me recover from this error by:
+
+1. Analyzing what went wrong
+2. Suggesting an alternative approach 
+3. Providing a specific plan to overcome this issue
+
+Be specific and precise in your recovery plan. Consider:
+- Were there incorrect assumptions?
+- Was there missing information?
+- Was the approach incorrect?
+- Is there a simpler way to achieve the goal?
+
+Please think step by step and provide a clear recovery plan.
+"""
+    
+    def _find_tool(self, tool_name: str) -> Optional[Tool]:
+        """Find a tool by name (case-insensitive).
+        
+        Args:
+            tool_name: Name of the tool to find
+            
+        Returns:
+            The matching tool or None if not found
+        """
+        tool_name_lower = tool_name.lower()
+        for tool in self.tools:
+            if tool.name.lower() == tool_name_lower:
+                return tool
+        return None 

@@ -72,7 +72,7 @@ class AdvancedAgentTeam(AgentTeam):
         self,
         name: str,
         agents: List[Agent],
-        options: AdvancedTeamOptions
+        options: AdvancedTeamOptions = AdvancedTeamOptions()
     ):
         """
         Initialize an advanced agent team.

@@ -3,12 +3,12 @@ Planner module for generating execution plans.
 """
 
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Optional
 
 from .tools.tools import Tool
 from .memory.memory import Memory
 from .llms import LLM
-
+from .utils.debug_logger import DebugLogger
 
 class Planner(ABC):
     """
@@ -42,14 +42,17 @@ class SimpleLLMPlanner(Planner):
     An enhanced LLM-based planner that generates tool-aware execution plans.
     """
     
-    def __init__(self, planner_model: LLM):
+    def __init__(self, planner_model: LLM, debug: bool = False):
         """
         Initialize the simple LLM planner.
         
         Args:
             planner_model: The LLM instance to use for planning (OpenAIChat or TogetherChat)
+            debug: Whether to enable debug logging
         """
         self.planner_model = planner_model
+        self.debug = debug
+        self.logger = DebugLogger(debug)
     
     async def generate_plan(
         self,
@@ -68,6 +71,11 @@ class SimpleLLMPlanner(Planner):
         Returns:
             A string representation of the plan in JSON format
         """
+        self.logger.log("[Planner] Generating plan", {
+            "query": user_query,
+            "num_tools": len(tools) if tools else 0
+        })
+        
         context = await memory.get_context()
         
         # Build detailed tool descriptions including parameters
@@ -85,7 +93,7 @@ class SimpleLLMPlanner(Planner):
                 desc.append(f"Example: {t.docs.usage_example}")
             tool_descriptions.append("\n".join(desc))
         
-        tools_str = "\n\n".join(tool_descriptions)
+        tools_str = "\n\n".join(tool_descriptions) if tools else "No tools available."
         
         context_str = "\n".join([
             f"{m['role'] if isinstance(m, dict) else m.role}: {m['content'] if isinstance(m, dict) else m.content}"
@@ -96,72 +104,54 @@ class SimpleLLMPlanner(Planner):
             {"role": "system", "content": """You are a task planning assistant that creates structured, tool-aware execution plans.
 Your plans MUST follow these strict rules:
 
-1. TOOL USAGE:
-- Before using any tool, verify it exists in the available tools list
-- Include ALL required parameters for each tool
-- After each tool call, add a message step to process and analyze the result
-- If a tool fails, include fallback steps in the plan
-
-2. STEP STRUCTURE:
-For tool steps, use EXACTLY this format:
-{
-  "action": "tool",
-  "details": "ToolName",
-  "args": {
-    "param1": "value1",
-    "param2": "value2"
+1. RESPONSE TYPES:
+For queries that don't require tools or can be answered directly:
+[
+  {
+    "action": "complete",
+    "details": "Your comprehensive answer to the query"
   }
-}
+]
 
-For message/analysis steps, use:
-{
-  "action": "message",
-  "details": "Your analysis of the previous step's result"
-}
-
-For final answers, use:
-{
-  "action": "complete",
-  "details": "Your comprehensive final answer that includes all gathered information"
-}
-
-3. PLAN FLOW:
-- Start with information gathering using appropriate tools
-- Process and analyze each tool's output before proceeding
-- Include error handling and alternative paths
-- ALWAYS end with a complete action that summarizes all findings
-
-4. VALIDATION:
-- Verify all required tool parameters are included
-- Ensure tool names match exactly with available tools
-- Check that each tool result is properly analyzed
-- Validate that the final answer incorporates all gathered information
-
-Example plan structure:
+For queries requiring tool usage:
 [
   {
     "action": "tool",
-    "details": "SearchTool",
-    "args": {"query": "specific search terms"}
+    "details": "ToolName",
+    "args": {
+      "param1": "value1"
+    }
   },
   {
     "action": "message",
-    "details": "Analyzing search results to determine next steps..."
-  },
-  {
-    "action": "tool",
-    "details": "ProcessData",
-    "args": {"input": "data from search"}
-  },
-  {
-    "action": "message",
-    "details": "Processing complete. Key findings: [...]"
+    "details": "Analysis of the tool result"
   },
   {
     "action": "complete",
-    "details": "Based on the search and processing results, here is the comprehensive answer: [...]"
+    "details": "Final comprehensive answer"
   }
-]"""},
+]
+
+2. TOOL USAGE (when tools are available):
+- Before using any tool, verify it exists in the available tools list
+- Include ALL required parameters for each tool
+- After each tool call, add a message step to process the result
+- If a tool fails, include fallback steps
+
+3. PLAN FLOW:
+- For simple queries or when no tools are needed, use a single "complete" action
+- For complex queries with tools:
+  * Start with information gathering
+  * Process each tool's output
+  * End with a complete action summarizing findings
+
+4. VALIDATION:
+- Ensure the plan is valid JSON
+- All steps must have "action" and "details" fields
+- Tool steps must include "args" with required parameters
+- Final step must always be a "complete" action
+
+IMPORTANT: If no tools are needed or available, return a simple plan with just a complete action."""},
             {
                 "role": "user",
                 "content": f"""
@@ -173,39 +163,54 @@ Available Tools:
 Context:
 {context_str}
 
-Create a detailed, tool-aware plan to solve this query.
-Remember:
-1. Use ONLY tools from the available tools list
-2. Include ALL required parameters
-3. Analyze each tool's output
-4. End with a comprehensive final answer
-
+Create a plan to answer this query. If no tools are needed or none are available, provide a direct answer plan.
 Return ONLY a valid JSON array of steps."""
             }
         ]
         
-        plan = await self.planner_model.call(plan_prompt)
-        
-        # Validate plan structure
         try:
+            # Get the plan from the model
+            self.logger.log("[Planner] Requesting plan from model")
+            plan = await self.planner_model.call(plan_prompt)
+            self.logger.log("[Planner] LLM Output:", {"llm_output": plan})
+            
+            # Try to parse the plan as JSON
             import json
-            parsed_plan = json.loads(plan)
+            try:
+                parsed_plan = json.loads(plan)
+                self.logger.log("[Planner] Successfully parsed plan as JSON")
+            except json.JSONDecodeError as e:
+                self.logger.log("[Planner] Failed to parse as JSON, wrapping as simple plan", {"error": str(e)})
+                # If the model didn't return valid JSON, wrap the response in a simple plan
+                return json.dumps([{
+                    "action": "complete",
+                    "details": plan.strip()
+                }])
+            
+            # Validate plan structure
             if not isinstance(parsed_plan, list):
-                raise ValueError("Plan must be a JSON array")
+                self.logger.log("[Planner] Plan is not a list, converting to simple plan")
+                return json.dumps([{
+                    "action": "complete",
+                    "details": "Based on the information provided, here is the answer: " + str(parsed_plan)
+                }])
             
             # Ensure plan ends with complete action
             if not parsed_plan or parsed_plan[-1].get("action") != "complete":
+                self.logger.log("[Planner] Adding missing complete action")
                 parsed_plan.append({
                     "action": "complete",
                     "details": "Based on the gathered information, here is the final answer..."
                 })
-                plan = json.dumps(parsed_plan)
-                
-        except Exception as e:
-            # If plan parsing fails, return a simple one-step plan
-            plan = json.dumps([{
-                "action": "message",
-                "details": f"Error parsing plan: {str(e)}. Proceeding with direct response."
-            }])
             
-        return plan 
+            final_plan = json.dumps(parsed_plan)
+            self.logger.log("[Planner] Generated final plan", {"plan": final_plan})
+            return final_plan
+            
+        except Exception as e:
+            self.logger.error("[Planner] Error during plan generation", {"error": str(e)})
+            # If anything goes wrong, return a simple plan with an error message
+            return json.dumps([{
+                "action": "complete",
+                "details": f"I encountered an error while planning ({str(e)}), but I'll provide a direct answer: {user_query}"
+            }]) 
