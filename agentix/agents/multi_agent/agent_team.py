@@ -1,39 +1,601 @@
-from typing import List, Dict, Optional, Callable, Any
+import time
+from typing import List, Dict, Any, Optional, Callable, Union, Awaitable
 from dataclasses import dataclass
 
 from ..agent import Agent
+from ...memory.memory import Memory
+from ...utils.debug_logger import DebugLogger
 
 
 @dataclass
 class TeamHooks:
     """Lifecycle hooks for agent team execution."""
+    # Base hooks
     on_agent_start: Optional[Callable[[str, str], None]] = None
     on_agent_end: Optional[Callable[[str, str], None]] = None
     on_error: Optional[Callable[[str, Exception], None]] = None
     on_final: Optional[Callable[[List[str]], None]] = None
+    # Advanced hooks
+    on_round_start: Optional[Callable[[int, int], None]] = None
+    on_round_end: Optional[Callable[[int, Dict[str, 'AgentContribution']], None]] = None
+    on_convergence: Optional[Callable[[Agent, str], None]] = None
+    on_aggregation: Optional[Callable[[str], None]] = None
+
+
+@dataclass
+class AgentRole:
+    """Defines a specialization for an agent in a team."""
+    name: str
+    description: str
+    query_transform: Callable[[str], str]
+
+
+@dataclass
+class TeamConfiguration:
+    """Defines the roles and specializations for a team."""
+    roles: Dict[str, AgentRole]
+    default_role: Optional[AgentRole] = None
+
+
+@dataclass
+class AgentContribution:
+    """Tracks an agent's contribution with metadata."""
+    agent: Agent
+    content: str
+    has_final_answer: bool
+    timestamp: Optional[int] = None
+
+
+@dataclass
+class TeamOptions:
+    """
+    Options for configuring team behavior:
+    1) Shared memory for agents to see the same conversation context
+    2) Team configuration with roles and specializations
+    3) Debug flag for verbose logging
+    """
+    shared_memory: Optional[Memory] = None
+    team_config: Optional[TeamConfiguration] = None
+    hooks: Optional[TeamHooks] = None
+    debug: bool = False
 
 
 class AgentTeam:
     """
-    Orchestrates multiple agents.
-    Could be parallel calls or passing context from one to the next.
+    A team of agents that can be used to solve a problem.
     """
     
-    def __init__(self, name: str, agents: List[Agent]):
+    def __init__(
+        self,
+        name: str,
+        agents: List[Agent],
+        options: TeamOptions = TeamOptions()
+    ):
         """
         Initialize an agent team.
         
         Args:
             name: The name of the team
             agents: List of agents in the team
+            options: Team configuration options
         """
         self.name = name
         self.agents = agents
+        self.shared_memory = options.shared_memory
+        self.team_config = options.team_config
+        self.hooks = options.hooks
+        self.logger = DebugLogger(options.debug)
+    
+    def set_team_configuration(self, config: TeamConfiguration) -> None:
+        """
+        Configure team roles and specializations.
+        
+        Args:
+            config: Team configuration with roles
+        """
+        self.team_config = config
+        self.logger.log("Team configuration updated", {
+            "roles": list(config.roles.keys())
+        })
+    
+    def enable_shared_memory(self) -> None:
+        """
+        If a sharedMemory is provided, each Agent's memory references
+        the same memory object. This preserves agent tools and other configurations.
+        """
+        if not self.shared_memory:
+            self.logger.warn("No shared memory set. Nothing to enable.")
+            return
+        
+        for agent in self.agents:
+            # Store the agent's tools before replacing the memory
+            agent_tools = agent.tools
+            
+            # Set the shared memory
+            agent.memory = self.shared_memory
+            
+            # Ensure the agent's tools are preserved 
+            if agent_tools:
+                # Make sure the tools are properly registered with the agent
+                agent.tools = agent_tools
+                self.logger.log(f"Preserved {len(agent_tools)} tools for agent {agent.name}")
+        
+        self.logger.log("Shared memory enabled for all agents")
+    
+    def get_agent_role(self, agent: Agent) -> Optional[AgentRole]:
+        """
+        Get the role for a specific agent.
+        
+        Args:
+            agent: The agent to get role for
+            
+        Returns:
+            The agent's role, or None if not found
+        """
+        if not self.team_config:
+            return None
+        
+        # Check for specific role assignment
+        role = self.team_config.roles.get(agent.name)
+        if role:
+            return role
+        
+        # Fall back to default role if specified
+        return self.team_config.default_role
+    
+    def get_specialized_query(self, agent: Agent, base_query: str) -> str:
+        """
+        Transform query based on agent's role.
+        
+        Args:
+            agent: The agent to transform query for
+            base_query: The original query
+            
+        Returns:
+            The transformed query
+        """
+        role = self.get_agent_role(agent)
+        if not role:
+            self.logger.warn(f"No role defined for agent {agent.name}, using base query")
+            return base_query
+        
+        try:
+            transformed_query = role.query_transform(base_query)
+            self.logger.log(f"Query transformed for {agent.name} ({role.name})", {
+                "original": base_query,
+                "transformed": transformed_query
+            })
+            return transformed_query
+        except Exception as error:
+            self.logger.error(f"Error transforming query for {agent.name}", {"error": str(error)})
+            return base_query
+    
+    async def track_contribution(
+        self,
+        agent: Agent,
+        content: str,
+        has_converged: bool
+    ) -> None:
+        """
+        Improved contribution tracking with metadata.
+        
+        Args:
+            agent: The agent that contributed
+            content: The content of the contribution
+            has_converged: Whether the content has converged (for run_interleaved)
+        """
+        role = self.get_agent_role(agent)
+        self.logger.log(f"Tracking contribution from {agent.name}", {
+            "role": role.name if role else 'Unspecified',
+            "content_length": len(content),
+            "has_converged": has_converged
+        })
+        
+        # Add to shared memory with metadata
+        if self.shared_memory:
+            await self.shared_memory.add_message({
+                "role": "assistant",
+                "content": content,
+                "metadata": {
+                    "agent_name": agent.name,
+                    "role_name": role.name if role else None,
+                    "timestamp": int(time.time() * 1000),
+                    "has_converged": has_converged
+                }
+            })
+    
+    def build_team_system_prompt(self) -> str:
+        """
+        Build team-level system prompt.
+        
+        Returns:
+            A system prompt for the team
+        """
+        role_descriptions = ""
+        if self.team_config:
+            role_descriptions = "\n".join([
+                f"{name}: {role.description}"
+                for name, role in self.team_config.roles.items()
+            ])
+        
+        return f"""
+This is a collaborative analysis by multiple expert agents.
+Each agent has a specific role and expertise:
+{role_descriptions}
+
+Agents will build on each other's insights while maintaining their specialized focus.
+Final responses should be marked with "FINAL ANSWER:".
+"""
+    
+    async def initialize_shared_context(self, query: str) -> None:
+        """
+        Initialize shared memory with system and user context.
+        
+        Args:
+            query: The user query to initialize with
+        """
+        if not self.shared_memory:
+            return
+        
+        # Clear any previous conversation
+        await self.shared_memory.clear()
+        
+        # Add system context
+        await self.shared_memory.add_message({
+            "role": "system",
+            "content": self.build_team_system_prompt()
+        })
+        
+        # Add user query
+        await self.shared_memory.add_message({
+            "role": "user",
+            "content": query
+        })
+        
+        self.logger.log("Shared context initialized", {"query": query})
+    
+    def have_all_agents_contributed(
+        self,
+        contributions: Dict[str, AgentContribution]
+    ) -> bool:
+        """
+        Check if all agents have contributed.
+        
+        Args:
+            contributions: Map of agent name to contribution
+            
+        Returns:
+            True if all agents have contributed, False otherwise
+        """
+        return len(contributions) == len(self.agents)
+    
+    def have_all_agents_converged(
+        self,
+        contributions: Dict[str, AgentContribution]
+    ) -> bool:
+        """
+        Check if all agents have contributed AND converged.
+        
+        Args:
+            contributions: Map of agent name to contribution
+            
+        Returns:
+            True if all agents have contributed and converged, False otherwise
+        """
+        if not self.have_all_agents_contributed(contributions):
+            return False
+        
+        # Check if all contributions have converged
+        all_converged = all(
+            contribution.has_final_answer
+            for contribution in contributions.values()
+        )
+        
+        self.logger.log("Checking convergence status", {
+            "total_agents": len(self.agents),
+            "contributing_agents": len(contributions),
+            "all_converged": all_converged,
+            "convergence_status": [
+                {
+                    "agent": name,
+                    "has_converged": c.has_final_answer
+                }
+                for name, c in contributions.items()
+            ]
+        })
+        
+        return all_converged
+    
+    async def run_interleaved(
+        self,
+        user_query: str,
+        max_rounds: int,
+        is_converged: Callable[[str], Union[bool, Awaitable[bool]]],
+        require_all_agents: bool = False
+    ) -> str:
+        """
+        Interleaved/Chat-like approach where agents build on each other's contributions.
+        
+        Args:
+            user_query: The user query to run
+            max_rounds: Maximum number of rounds to run
+            is_converged: Function to check if content has converged
+            require_all_agents: Whether to require all agents to contribute before stopping
+            
+        Returns:
+            The final result
+        """
+        if require_all_agents:
+            self.logger.log("requireAllAgents is true. Waiting for all agents to contribute.")
+            self.logger.log(f"Total agents: {len(self.agents)}\n")
+        
+        self.logger.log("Starting interleaved team workflow", {
+            "query": user_query,
+            "max_rounds": max_rounds,
+            "require_all_agents": require_all_agents,
+            "team_size": len(self.agents)
+        })
+        
+        # Track contributions per round
+        contributions: Dict[str, AgentContribution] = {}
+        current_round = 0
+        final_answer = None
+        
+        # Initialize shared memory if enabled
+        await self.initialize_shared_context(user_query)
+        
+        # Main interaction loop
+        while current_round < max_rounds:
+            current_round += 1
+            self.logger.log(f"Starting round {current_round}/{max_rounds}")
+            
+            if self.hooks and self.hooks.on_round_start:
+                self.hooks.on_round_start(current_round, max_rounds)
+            
+            # Each agent takes a turn in the current round
+            for agent in self.agents:
+                self.logger.log(f"Round {current_round}: {agent.name}'s turn")
+                
+                if self.hooks and self.hooks.on_agent_start:
+                    self.hooks.on_agent_start(agent.name, user_query)
+                
+                # Get agent's specialized query based on their role
+                agent_query = self.get_specialized_query(agent, user_query)
+                
+                try:
+                    agent_output = await agent.run(agent_query)
+                    self.logger.log(f"{agent.name} response received", {"agent_output": agent_output})
+                    
+                    # Check if this output meets convergence criteria
+                    has_converged_result = is_converged(agent_output)
+                    if isinstance(has_converged_result, bool):
+                        has_converged = has_converged_result
+                    else:
+                        has_converged = await has_converged_result
+                    
+                    # Track agent contribution with metadata
+                    contributions[agent.name] = AgentContribution(
+                        agent=agent,
+                        content=agent_output,
+                        has_final_answer=has_converged,
+                        timestamp=int(time.time() * 1000)
+                    )
+                    
+                    await self.track_contribution(agent, agent_output, has_converged)
+                    
+                    if self.hooks and self.hooks.on_agent_end:
+                        self.hooks.on_agent_end(agent.name, agent_output)
+                    
+                    # Check convergence conditions
+                    if has_converged:
+                        if self.hooks and self.hooks.on_convergence:
+                            self.hooks.on_convergence(agent, agent_output)
+                        
+                        if not require_all_agents:
+                            # Stop at first convergence if not requiring all agents
+                            final_answer = agent_output
+                            self.logger.log(f"{agent.name} met convergence criteria, stopping early")
+                            break
+                        elif self.have_all_agents_converged(contributions):
+                            # Stop only if all agents have contributed AND converged
+                            final_answer = self.combine_contributions(contributions)
+                            self.logger.log("All agents have contributed and converged")
+                            break
+                
+                except Exception as error:
+                    self.logger.error(f"Error during {agent.name}'s turn", {"error": str(error)})
+                    if self.hooks and self.hooks.on_error:
+                        self.hooks.on_error(agent.name, error)
+                    
+                    contributions[agent.name] = AgentContribution(
+                        agent=agent,
+                        content=f"Error during execution: {str(error)}",
+                        has_final_answer=False,
+                        timestamp=int(time.time() * 1000)
+                    )
+            
+            if self.hooks and self.hooks.on_round_end:
+                self.hooks.on_round_end(current_round, contributions)
+            
+            # Break if we found a final answer
+            if final_answer:
+                self.logger.log("Convergence achieved", {"final_answer": final_answer})
+                break
+            
+            # If all agents have contributed but not all converged, log and continue
+            if (
+                self.have_all_agents_contributed(contributions) and
+                not self.have_all_agents_converged(contributions)
+            ):
+                self.logger.log("All agents contributed but not all converged, continuing to next round")
+                continue
+            
+            # Check if we should continue
+            if current_round == max_rounds:
+                self.logger.warn(f"Maximum rounds ({max_rounds}) reached without convergence")
+        
+        # If no final answer was reached, combine all contributions
+        if not final_answer:
+            self.logger.warn("No convergence reached, combining all contributions")
+            final_answer = self.combine_contributions(contributions)
+        
+        formatted_output = self.format_final_output(final_answer, contributions)
+        
+        if self.hooks and self.hooks.on_aggregation:
+            self.hooks.on_aggregation(formatted_output)
+        
+        return formatted_output
+    
+    def combine_contributions(self, contributions: Dict[str, AgentContribution]) -> str:
+        """
+        Combine all agent contributions into a final response.
+        
+        Args:
+            contributions: Map of agent name to contribution
+            
+        Returns:
+            Combined contributions as a string
+        """
+        return "\n---\n".join([
+            f"[{c.agent.name}{' (' + self.get_agent_role(c.agent).name + ')' if self.get_agent_role(c.agent) else ''}]\n{c.content}"
+            for c in sorted(
+                contributions.values(),
+                key=lambda x: x.timestamp or 0  # Sort by timestamp if available
+            )
+        ])
+    
+    def format_final_output(
+        self,
+        final_answer: str,
+        contributions: Dict[str, AgentContribution]
+    ) -> str:
+        """
+        Format the final output with additional context if needed.
+        
+        Args:
+            final_answer: The final answer content
+            contributions: Map of agent name to contribution
+            
+        Returns:
+            Formatted final output
+        """
+        contributing_agents = ", ".join([
+            f"{name}{' ✓' if c.has_final_answer else ''}"
+            for name, c in contributions.items()
+        ])
+        
+        header = f"Team Response (Contributors: {contributing_agents})\n{'=' * 40}\n"
+        return f"{header}{final_answer}"
+    
+    async def run_sequential(self, query: str, hooks: Optional[TeamHooks] = None) -> str:
+        """
+        Runs agents sequentially with specialized query transformations.
+        This override properly transforms queries based on agent roles and ensures
+        proper workflow between agents.
+        
+        Args:
+            query: The user input or initial query
+            hooks: Optional TeamHooks for debugging/logging steps and errors
+            
+        Returns:
+            The final output string after all agents have processed it
+        """
+        self.logger.log(f"[AgentTeam:{self.name}] Starting sequential execution", {
+            "query": query,
+            "agents": [agent.name for agent in self.agents]
+        })
+        
+        # Initialize shared memory if available
+        await self.initialize_shared_context(query)
+        
+        current_input = query
+        all_contributions = []
+        
+        for idx, agent in enumerate(self.agents):
+            agent_role = self.get_agent_role(agent)
+            role_name = agent_role.name if agent_role else "Unspecified"
+            
+            self.logger.log(f"[AgentTeam:{self.name}] Running agent {idx+1}/{len(self.agents)}: {agent.name} ({role_name})")
+            
+            # Get specialized query for this agent based on its role
+            specialized_query = self.get_specialized_query(agent, current_input)
+            
+            # Call hooks if available
+            if hooks and hooks.on_agent_start:
+                hooks.on_agent_start(agent.name, specialized_query)
+            
+            try:
+                # Run the agent with its specialized query
+                self.logger.log(f"[AgentTeam:{self.name}] Running {agent.name} with specialized query", {
+                    "original": current_input,
+                    "transformed": specialized_query
+                })
+                
+                output = await agent.run(specialized_query)
+                
+                self.logger.log(f"[AgentTeam:{self.name}] {agent.name} completed", {
+                    "output_length": len(output)
+                })
+                
+                # Store contribution for reporting
+                all_contributions.append({
+                    "agent": agent.name,
+                    "role": role_name,
+                    "output": output
+                })
+                
+                # Call hooks if available
+                if hooks and hooks.on_agent_end:
+                    hooks.on_agent_end(agent.name, output)
+                
+                # Pass to the next agent
+                current_input = output
+                
+                # Add to shared memory as a contribution
+                await self.track_contribution(agent, output, False)
+                
+            except Exception as err:
+                error_msg = f"Error from agent {agent.name}: {str(err)}"
+                self.logger.error(f"[AgentTeam:{self.name}] Error in sequential execution", {
+                    "agent": agent.name,
+                    "error": str(err)
+                })
+                
+                if hooks and hooks.on_error:
+                    hooks.on_error(agent.name, err)
+                
+                # Add error to contributions
+                all_contributions.append({
+                    "agent": agent.name,
+                    "role": role_name,
+                    "error": str(err)
+                })
+                
+                # Continue with a default message
+                current_input = error_msg
+                
+                # Add error to shared memory
+                if self.shared_memory:
+                    await self.shared_memory.add_message({
+                        "role": "system",
+                        "content": error_msg
+                    })
+        
+        # Handle final result with hooks
+        if hooks and hooks.on_final:
+            hooks.on_final([current_input])
+        
+        self.logger.log(f"[AgentTeam:{self.name}] Sequential execution completed", {
+            "contributions": len(all_contributions)
+        })
+        
+        return current_input 
     
     async def run_in_parallel(self, query: str, hooks: Optional[TeamHooks] = None) -> List[str]:
         """
-        Runs all agents in parallel on the same input query.
-        Each agent processes the query independently and returns its result.
+        Runs all agents in parallel with specialized query transformations.
+        This override properly transforms queries based on agent roles and ensures
+        proper tracking of contributions.
         
         Args:
             query: The user input or initial query
@@ -44,68 +606,82 @@ class AgentTeam:
         """
         import asyncio
         
-        async def run_agent(agent: Agent) -> str:
+        self.logger.log(f"[AgentTeam:{self.name}] Starting parallel execution", {
+            "query": query,
+            "agents": [agent.name for agent in self.agents]
+        })
+        
+        # Initialize shared memory if available
+        await self.initialize_shared_context(query)
+        
+        async def run_agent_with_role(agent: Agent) -> str:
+            agent_role = self.get_agent_role(agent)
+            role_name = agent_role.name if agent_role else "Unspecified"
+            
+            self.logger.log(f"[AgentTeam:{self.name}] Running agent: {agent.name} ({role_name})")
+            
+            # Get specialized query for this agent based on its role
+            specialized_query = self.get_specialized_query(agent, query)
+            
+            # Call hooks if available
             if hooks and hooks.on_agent_start:
-                hooks.on_agent_start(agent.name, query)
+                hooks.on_agent_start(agent.name, specialized_query)
             
             try:
-                output = await agent.run(query)
+                # Run the agent with its specialized query
+                self.logger.log(f"[AgentTeam:{self.name}] Running {agent.name} with specialized query", {
+                    "original": query,
+                    "transformed": specialized_query
+                })
+                
+                output = await agent.run(specialized_query)
+                
+                self.logger.log(f"[AgentTeam:{self.name}] {agent.name} completed", {
+                    "output_length": len(output)
+                })
+                
+                # Call hooks if available
                 if hooks and hooks.on_agent_end:
                     hooks.on_agent_end(agent.name, output)
                 
+                # Add to shared memory as a contribution
+                await self.track_contribution(agent, output, False)
+                
                 return output
-            
+                
             except Exception as err:
+                error_msg = f"Error from agent {agent.name}: {str(err)}"
+                self.logger.error(f"[AgentTeam:{self.name}] Error in parallel execution", {
+                    "agent": agent.name,
+                    "error": str(err)
+                })
+                
                 if hooks and hooks.on_error:
                     hooks.on_error(agent.name, err)
                 
-                raise  # re-raise the exception
+                # Add error to shared memory
+                if self.shared_memory:
+                    await self.shared_memory.add_message({
+                        "role": "system",
+                        "content": error_msg
+                    })
+                
+                return error_msg
         
         # Create a task for each agent
-        tasks = [run_agent(agent) for agent in self.agents]
-        results = await asyncio.gather(*tasks, return_exceptions=False)
+        tasks = [run_agent_with_role(agent) for agent in self.agents]
+        results = await asyncio.gather(*tasks)
         
+        # Handle final results with hooks
         if hooks and hooks.on_final:
             hooks.on_final(results)
         
+        self.logger.log(f"[AgentTeam:{self.name}] Parallel execution completed", {
+            "results": len(results)
+        })
+        
         return results
-    
-    async def run_sequential(self, query: str, hooks: Optional[TeamHooks] = None) -> str:
-        """
-        Runs agents sequentially, passing each agent's output as input to the next agent.
-        Forms a processing pipeline where agents transform the data in sequence.
-        
-        Args:
-            query: The user input or initial query
-            hooks: Optional TeamHooks for debugging/logging steps and errors
-            
-        Returns:
-            The final output string after all agents have processed it
-        """
-        current_input = query
-        
-        for agent in self.agents:
-            if hooks and hooks.on_agent_start:
-                hooks.on_agent_start(agent.name, current_input)
-            
-            try:
-                output = await agent.run(current_input)
-                if hooks and hooks.on_agent_end:
-                    hooks.on_agent_end(agent.name, output)
-                
-                current_input = output
-            
-            except Exception as err:
-                if hooks and hooks.on_error:
-                    hooks.on_error(agent.name, err)
-                
-                raise  # re-raise the exception
-        
-        if hooks and hooks.on_final:
-            hooks.on_final([current_input])
-        
-        return current_input
-    
+
     async def run_in_parallel_safe(self, query: str, hooks: Optional[TeamHooks] = None) -> List[Dict[str, Any]]:
         """
         A "safe" version of run_in_parallel that catches errors from individual agents.
@@ -122,13 +698,24 @@ class AgentTeam:
         import asyncio
         
         async def run_agent_safe(agent: Agent) -> Dict[str, Any]:
+            agent_role = self.get_agent_role(agent)
+            role_name = agent_role.name if agent_role else "Unspecified"
+            
+            self.logger.log(f"[AgentTeam:{self.name}] Running agent: {agent.name} ({role_name})")
+            
+            # Get specialized query for this agent based on its role
+            specialized_query = self.get_specialized_query(agent, query)
+            
             if hooks and hooks.on_agent_start:
-                hooks.on_agent_start(agent.name, query)
+                hooks.on_agent_start(agent.name, specialized_query)
             
             try:
-                out = await agent.run(query)
+                out = await agent.run(specialized_query)
                 if hooks and hooks.on_agent_end:
                     hooks.on_agent_end(agent.name, out)
+                
+                # Add to shared memory as a contribution
+                await self.track_contribution(agent, out, False)
                 
                 return {"success": True, "output": out}
             
@@ -136,7 +723,19 @@ class AgentTeam:
                 if hooks and hooks.on_error:
                     hooks.on_error(agent.name, err)
                 
-                return {"success": False, "output": str(err)}
+                error_msg = f"Error from agent {agent.name}: {str(err)}"
+                
+                # Add error to shared memory
+                if self.shared_memory:
+                    await self.shared_memory.add_message({
+                        "role": "system",
+                        "content": error_msg
+                    })
+                
+                return {"success": False, "output": error_msg}
+        
+        # Initialize shared memory if available
+        await self.initialize_shared_context(query)
         
         # Create a task for each agent
         tasks = [run_agent_safe(agent) for agent in self.agents]
@@ -163,24 +762,35 @@ class AgentTeam:
         outputs: List[str] = []
         current_input = query
         
+        # Initialize shared memory if available
+        await self.initialize_shared_context(query)
+        
         for agent in self.agents:
-            # onAgentStart hook
+            agent_role = self.get_agent_role(agent)
+            role_name = agent_role.name if agent_role else "Unspecified"
+            
+            self.logger.log(f"[AgentTeam:{self.name}] Running agent: {agent.name} ({role_name})")
+            
+            # Get specialized query for this agent based on its role
+            specialized_query = self.get_specialized_query(agent, current_input)
+            
             if hooks and hooks.on_agent_start:
-                hooks.on_agent_start(agent.name, current_input)
+                hooks.on_agent_start(agent.name, specialized_query)
             
             try:
-                out = await agent.run(current_input)
+                out = await agent.run(specialized_query)
                 
-                # onAgentEnd hook
                 if hooks and hooks.on_agent_end:
                     hooks.on_agent_end(agent.name, out)
+                
+                # Add to shared memory as a contribution
+                await self.track_contribution(agent, out, False)
                 
                 # record output, pass to next agent
                 outputs.append(out)
                 current_input = out
             
             except Exception as err:
-                # onError hook
                 if hooks and hooks.on_error:
                     hooks.on_error(agent.name, err)
                 
@@ -188,11 +798,17 @@ class AgentTeam:
                 error_msg = f"Error from agent {agent.name}: {str(err)}"
                 outputs.append(error_msg)
                 
+                # Add error to shared memory
+                if self.shared_memory:
+                    await self.shared_memory.add_message({
+                        "role": "system",
+                        "content": error_msg
+                    })
+                
                 # break or continue based on stop_on_error
                 if stop_on_error:
                     break
             
-        # onFinal hook after the sequence completes
         if hooks and hooks.on_final:
             hooks.on_final(outputs)
         
@@ -200,7 +816,7 @@ class AgentTeam:
     
     async def aggregate_results(self, query: str) -> str:
         """
-        Run all agents in parallel and aggregate their results.
+        Run all agents in parallel and aggregate their results with role information.
         
         Args:
             query: The query to run
@@ -209,4 +825,13 @@ class AgentTeam:
             Aggregated results from all agents
         """
         results = await self.run_in_parallel(query)
-        return "\n---\n".join(results)  # Combine all results 
+        
+        # Format results with role information
+        formatted_results = []
+        for i, result in enumerate(results):
+            agent = self.agents[i]
+            role = self.get_agent_role(agent)
+            role_info = f" ({role.name})" if role else ""
+            formatted_results.append(f"[{agent.name}{role_info}]\n{result}")
+        
+        return "\n---\n".join(formatted_results)

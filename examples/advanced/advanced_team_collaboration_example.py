@@ -17,9 +17,9 @@ import asyncio
 
 from agentix.agents import Agent, AgentOptions
 from agentix.agents.multi_agent import (
-    AdvancedAgentTeam, 
-    AdvancedTeamOptions, 
-    AdvancedTeamHooks,
+    AgentTeam, 
+    TeamOptions, 
+    TeamHooks,
     AgentRole, 
     TeamConfiguration, 
 )
@@ -138,7 +138,7 @@ async def main():
     )
     
     # Create advanced team hooks for monitoring the collaboration
-    hooks = AdvancedTeamHooks(
+    hooks = TeamHooks(
         # Basic team hooks
         on_agent_start=lambda agent_name, query: print(f"\n🚀 {agent_name} starting work..."),
         on_agent_end=lambda agent_name, result: print(f"✅ {agent_name} contributed"),
@@ -153,7 +153,7 @@ async def main():
     )
     
     # Configure the advanced team
-    team_options = AdvancedTeamOptions(
+    team_options = TeamOptions(
         shared_memory=shared_memory,
         team_config=team_config,
         hooks=hooks,
@@ -161,7 +161,7 @@ async def main():
     )
     
     # Create the advanced agent team
-    team = AdvancedAgentTeam(
+    team = AgentTeam(
         name="ProblemSolvingTeam",
         agents=[analyst_agent, critic_agent, innovator_agent, synthesizer_agent],
         options=team_options

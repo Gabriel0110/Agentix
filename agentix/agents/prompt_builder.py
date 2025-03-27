@@ -3,9 +3,8 @@ import time
 from typing import List, Dict, Any, Optional, Union
 import json
 
-from ..llms import LLM, OpenAIChat, TogetherChat
+from ..llms import LLM, OpenAIChat
 from ..tools.tools import Tool
-from ..tools.tool_metadata import ToolParameter
 
 
 class AgentPromptBuilder:

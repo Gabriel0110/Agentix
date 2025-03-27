@@ -15,7 +15,7 @@ import os
 import asyncio
 
 from agentix.agents import Agent, AgentOptions
-from agentix.agents.multi_agent import AgentCapability, AdvancedAgentRouter, RouterOptions
+from agentix.agents.multi_agent import AgentRouter, AgentCapability, RouterOptions
 from agentix.memory import ShortTermMemory
 from agentix.llms import OpenAIChat
 
@@ -104,7 +104,7 @@ async def main():
     }
     
     # 3. Create the advanced router
-    router = AdvancedAgentRouter(
+    router = AgentRouter(
         [finance_agent, legal_agent, general_agent],
         capabilities,
         options=RouterOptions(

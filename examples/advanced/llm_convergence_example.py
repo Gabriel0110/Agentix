@@ -15,7 +15,7 @@ import asyncio
 from agentix.agents import Agent, AgentOptions
 from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory, CompositeMemory
-from agentix.agents.multi_agent import LLMConvergenceChecker, AdvancedAgentTeam
+from agentix.agents.multi_agent import LLMConvergenceChecker, AgentTeam
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -118,7 +118,7 @@ async def main():
     )
     
     # Create the team
-    team = AdvancedAgentTeam(
+    team = AgentTeam(
         "ProsConsTeam",
         [pros_agent, cons_agent],
         {

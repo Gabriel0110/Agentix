@@ -13,7 +13,6 @@ The agent:
 """
 import os
 import asyncio
-from typing import Dict, Any
 
 from agentix.agents import Agent, AgentOptions, AgentHooks
 from agentix.llms import OpenAIChat

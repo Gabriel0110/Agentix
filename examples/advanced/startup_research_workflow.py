@@ -27,9 +27,8 @@ and can be extended for additional research domains.
 """
 import os
 import asyncio
-import json
 import time
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 from dataclasses import dataclass
 
 # Agentix Core Components
@@ -39,13 +38,13 @@ from agentix.evaluators import SimpleEvaluator, EvaluationResult
 
 # Agentix Multi-agent Components
 from agentix.agents.multi_agent import (
-    AdvancedAgentTeam,
-    AdvancedTeamOptions,
-    AdvancedTeamHooks,
+    AgentTeam,
+    TeamOptions,
+    TeamHooks,
     AgentRole,
     TeamConfiguration,
     LLMConvergenceChecker,
-    AdvancedAgentRouter,
+    AgentRouter,
     RouterOptions,
     AgentCapability
 )
@@ -406,7 +405,7 @@ class StartupResearchWorkflow:
             "trends": trends_agent
         }
     
-    def _create_router(self) -> AdvancedAgentRouter:
+    def _create_router(self) -> AgentRouter:
         """Initialize the advanced agent router."""
         print("🔀 Setting up agent router...")
         
@@ -454,13 +453,13 @@ class StartupResearchWorkflow:
         )
         
         # Create the router with the agent list
-        return AdvancedAgentRouter(
+        return AgentRouter(
             agents=[self.agents["news"], self.agents["summary"], self.agents["trends"]],
             capabilities=capabilities,
             options=router_options
         )
     
-    def _create_team(self) -> AdvancedAgentTeam:
+    def _create_team(self) -> AgentTeam:
         """Initialize the advanced agent team for data gathering."""
         print("👥 Building agent team...")
         
@@ -494,7 +493,7 @@ class StartupResearchWorkflow:
             self._increment_agent_calls()
         
         # Define team hooks for monitoring and debugging
-        team_hooks = AdvancedTeamHooks(
+        team_hooks = TeamHooks(
             on_agent_start=lambda agent_name, query: print(f"\n🚀 {agent_name} starting research..."),
             on_agent_end=agent_end_handler,
             on_error=lambda agent_name, error: print(f"❌ Error from {agent_name}: {str(error)}"),
@@ -504,7 +503,7 @@ class StartupResearchWorkflow:
         )
         
         # Configure the team options
-        team_options = AdvancedTeamOptions(
+        team_options = TeamOptions(
             shared_memory=self.memories["shared"],
             team_config=team_config,
             hooks=team_hooks,
@@ -512,7 +511,7 @@ class StartupResearchWorkflow:
         )
         
         # Create and configure the team with just the data gathering agents
-        team = AdvancedAgentTeam(
+        team = AgentTeam(
             name="StartupResearchTeam",
             agents=[self.agents["news"], self.agents["trends"]],  # Only include data gathering agents
             options=team_options
@@ -658,7 +657,7 @@ class StartupResearchWorkflow:
             )
             
             # Define team hooks for monitoring
-            team_hooks = AdvancedTeamHooks(
+            team_hooks = TeamHooks(
                 on_agent_start=lambda agent_name, query: print(f"\n🚀 {agent_name} starting research..."),
                 on_agent_end=lambda agent_name, result: print(f"✅ {agent_name} completed research"),
                 on_error=lambda agent_name, error: print(f"❌ Error from {agent_name}: {str(error)}"),
@@ -666,10 +665,10 @@ class StartupResearchWorkflow:
             )
             
             # Create a data gathering team with just news and trend agents
-            data_team = AdvancedAgentTeam(
+            data_team = AgentTeam(
                 name="DataGatheringTeam",
                 agents=[self.agents["news"], self.agents["trends"]],
-                options=AdvancedTeamOptions(
+                options=TeamOptions(
                     shared_memory=self.memories["shared"],
                     team_config=team_config,
                     hooks=team_hooks,

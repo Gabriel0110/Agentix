@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 import asyncio
 import os
-from typing import Optional, Dict
 
 from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory

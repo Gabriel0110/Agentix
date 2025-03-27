@@ -12,15 +12,8 @@ for content creation. The team consists of:
 
 import os
 import asyncio
-from typing import Dict, Any
 
-from agentix.agents import AutonomousAgent, AutoAgentOptions
-from agentix.agents.multi_agent import (
-    AdvancedAgentTeam,
-    AdvancedTeamOptions,
-    AgentRole,
-    TeamConfiguration
-)
+from agentix.agents import Agent, AgentTeam, AgentOptions, TeamOptions, AgentRole, TeamConfiguration
 from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory, CompositeMemory
 from agentix.tools import DuckDuckGoToolkit
@@ -59,7 +52,7 @@ async def main():
     # Create specialized agents
     
     # 1. Research Agent
-    research_agent = AutonomousAgent(
+    research_agent = Agent(
         name="Researcher",
         model=model,
         memory=research_mem,
@@ -73,7 +66,7 @@ async def main():
             "Your research will be used by an Outline Agent, so format your output clearly.",
             "NEVER proceed without using your search tools - real research is essential."
         ],
-        options=AutoAgentOptions(
+        options=AgentOptions(
             enable_planning=True,
             max_steps=15,
             debug=True
@@ -81,7 +74,7 @@ async def main():
     )
     
     # 2. Outline Agent
-    outline_agent = AutonomousAgent(
+    outline_agent = Agent(
         name="Outliner",
         model=model,
         memory=outline_mem,
@@ -94,7 +87,7 @@ async def main():
             "Consider the target audience and purpose.",
             "Your outline will be used by a Writer Agent, so make it comprehensive and clear."
         ],
-        options=AutoAgentOptions(
+        options=AgentOptions(
             enable_planning=False,
             max_steps=15,
             debug=True
@@ -102,7 +95,7 @@ async def main():
     )
     
     # 3. Writer Agent
-    writer_agent = AutonomousAgent(
+    writer_agent = Agent(
         name="Writer",
         model=model,
         memory=writer_mem,
@@ -115,7 +108,7 @@ async def main():
             "Maintain consistent tone and style.",
             "Your content will be edited by an Editor Agent, so focus on comprehensive content creation."
         ],
-        options=AutoAgentOptions(
+        options=AgentOptions(
             enable_planning=False,
             max_steps=15,
             debug=True
@@ -123,7 +116,7 @@ async def main():
     )
     
     # 4. Editor Agent
-    editor_agent = AutonomousAgent(
+    editor_agent = Agent(
         name="Editor",
         model=model,
         memory=editor_mem,
@@ -136,7 +129,7 @@ async def main():
             "Enhance readability while maintaining the original meaning.",
             "Add a final conclusion and summary if missing from the original content."
         ],
-        options=AutoAgentOptions(
+        options=AgentOptions(
             enable_planning=False,
             max_steps=15,
             debug=True
@@ -183,10 +176,10 @@ async def main():
     )
     
     # Create the team
-    team = AdvancedAgentTeam(
+    team = AgentTeam(
         name="ContentCreationTeam",
         agents=[research_agent, outline_agent, writer_agent, editor_agent],
-        options=AdvancedTeamOptions(
+        options=TeamOptions(
             shared_memory=shared_memory,
             team_config=team_config,
             debug=True

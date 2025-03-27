@@ -2,9 +2,9 @@
 Agentix - A Python framework for building AI agents
 """
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
-from .agents.agent import Agent
+from .agents.agent import Agent, AgentOptions
 from .agents.prompt_builder import AgentPromptBuilder
 from .llms.openai_chat import OpenAIChat
 from .llms.openai_embeddings import OpenAIEmbeddings
@@ -20,16 +20,10 @@ from .agents.multi_agent import (
     AgentRouter,
     AgentTeam,
     TeamHooks,
-    AdvancedAgentRouter,
-    AgentCapability,
-    RouterOptions,
-    RoutingMetadata,
-    AdvancedAgentTeam,
-    AdvancedTeamHooks,
     AgentRole,
     TeamConfiguration,
     AgentContribution, 
-    AdvancedTeamOptions,
+    TeamOptions,
     LLMConvergenceChecker
 )
 from .planner import Planner, SimpleLLMPlanner
@@ -38,6 +32,7 @@ from .evaluators.simple_evaluator import SimpleEvaluator, EvaluationResult
 
 __all__ = [
     "Agent",
+    "AgentOptions",
     "AgentPromptBuilder",
     "OpenAIChat",
     "OpenAIEmbeddings",
@@ -54,16 +49,10 @@ __all__ = [
     "AgentRouter",
     "AgentTeam",
     "TeamHooks",
-    "AdvancedAgentRouter",
-    "AgentCapability",
-    "RouterOptions",
-    "RoutingMetadata",
-    "AdvancedAgentTeam",
-    "AdvancedTeamHooks",
     "AgentRole",
     "TeamConfiguration",
     "AgentContribution",
-    "AdvancedTeamOptions",
+    "TeamOptions",
     "LLMConvergenceChecker",
     "Planner",
     "SimpleLLMPlanner",

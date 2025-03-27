@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import os
 import asyncio
-from typing import Dict, Any, List, Optional, Union, Awaitable
+from typing import Dict, Any, List, Optional
 
 from agentix.agents import Agent, AgentOptions, AgentHooks
 from agentix.memory import ShortTermMemory

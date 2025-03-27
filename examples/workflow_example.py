@@ -11,7 +11,7 @@ The example shows multiple types of workflows:
 import os
 import asyncio
 
-from agentix.workflow import Workflow, WorkflowStep, LLMCallStep
+from agentix.workflow import Workflow, LLMCallStep
 from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory
 

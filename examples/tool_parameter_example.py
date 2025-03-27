@@ -9,7 +9,7 @@ import os
 import asyncio
 import json
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any, Optional
 
 from agentix.agents import Agent, AgentHooks
 from agentix.llms import OpenAIChat

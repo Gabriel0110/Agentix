@@ -16,7 +16,7 @@ import os
 import asyncio
 
 from agentix.agents import Agent, AgentOptions
-from agentix.agents.multi_agent import AdvancedAgentTeam, TeamConfiguration, AgentRole, AdvancedTeamHooks
+from agentix.agents.multi_agent import AgentTeam, TeamConfiguration, AgentRole, TeamHooks
 from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory, CompositeMemory
 
@@ -49,7 +49,7 @@ def convergence_checks():
 async def main():
     """Main function demonstrating advanced agent team capabilities."""
     # OPTIONAL: Example usage of advanced team hooks for logging
-    team_hooks = AdvancedTeamHooks(
+    team_hooks = TeamHooks(
         on_agent_start=lambda name, input_str: print(f"\n🤖 {name} starting analysis..."),
         on_agent_end=lambda name, output: print(f"✅ {name} completed analysis"),
         on_round_start=lambda round_num, max_rounds: print(f"\n📍 Starting round {round_num}/{max_rounds}"),
@@ -133,7 +133,7 @@ async def main():
     )
     
     # Create technical analysis team
-    technical_team = AdvancedAgentTeam(
+    technical_team = AgentTeam(
         "TechnicalTeam",
         [technical_agent, security_agent],
         {
@@ -224,7 +224,7 @@ async def main():
     )
     
     # Create business analysis team
-    business_team = AdvancedAgentTeam(
+    business_team = AgentTeam(
         "BusinessTeam",
         [market_agent, finance_agent],
         {

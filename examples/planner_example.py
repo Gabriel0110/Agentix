@@ -5,7 +5,8 @@ from typing import Dict, Any, Optional
 
 from agentix.agents import Agent, AgentOptions
 from agentix.llms import OpenAIChat
-from agentix.memory import ShortTermMemory, Tool
+from agentix.memory import ShortTermMemory
+from agentix.tools import Tool
 from agentix.planner import SimpleLLMPlanner
 
 from dotenv import load_dotenv
