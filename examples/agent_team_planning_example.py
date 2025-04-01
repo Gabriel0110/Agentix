@@ -2,7 +2,7 @@
 import os
 import asyncio
 
-from agentix.agents import Agent, AgentTeam, AgentOptions, AdvancedAgentTeam, AdvancedTeamOptions
+from agentix.agents import Agent, AgentTeam, AgentOptions, TeamOptions
 from agentix.llms import OpenAIChat
 from agentix.memory import ShortTermMemory
 
@@ -46,7 +46,7 @@ async def main():
     )
 
     # 5) Create an AgentTeam
-    team = AdvancedAgentTeam("Greeting+MotivationTeam", [greeting_agent, motivation_agent], options=AdvancedTeamOptions(debug=True))
+    team = AgentTeam("Greeting+MotivationTeam", [greeting_agent, motivation_agent], options=TeamOptions(debug=True))
 
     # 6) Use run_in_parallel
     user_prompt = "I could use some positivity today!"
