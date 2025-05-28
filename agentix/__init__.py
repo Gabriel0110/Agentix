@@ -2,7 +2,7 @@
 Agentix - A Python framework for building AI agents
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from .agents.agent import Agent, AgentOptions
 from .agents.prompt_builder import AgentPromptBuilder
