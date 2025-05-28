@@ -59,5 +59,5 @@ __all__ = [
     "FirecrawlStatusTool",
     "FirecrawlMapTool",
     "FirecrawlToolkit",
-    "function_tool"
+    "function_tool",
 ] 
